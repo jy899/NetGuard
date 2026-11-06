@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Topology · NetGuard</title>
+  <link rel="icon" href="/static/assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/css/netguard.css">
+  <link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
+</head>
+<body class="ng-topology-page">
+  <div class="ng-app">
+    <aside class="ng-sidebar" id="ng-sidebar"></aside>
+    <div class="ng-main">
+      <header class="ng-topbar" id="ng-topbar"></header>
+      <main class="ng-content">
+        <div class="ng-workspace">
+          <!-- Network Topology Workspace -->
+          <section class="ng-canvas-col" aria-label="Network Topology Workspace">
+            <div class="ng-toolbar">
+              <label class="visually-hidden" for="network-select">Network</label>
+              <select class="form-select form-select-sm" id="network-select"></select>
+              <span class="divider"></span>
+              <button class="btn btn-sm btn-outline-primary" id="btn-add-device" data-requires-network><i class="bi bi-plus-lg me-1"></i>Add Device</button>
+              <button class="btn btn-sm btn-outline-primary" id="btn-add-link" data-requires-network><i class="bi bi-share me-1"></i>Add Link</button>
+              <button class="btn btn-sm btn-outline-secondary" id="btn-connect" data-requires-network aria-pressed="false"
+                title="Click a source device, then a destination device"><i class="bi bi-bezier2 me-1"></i>Connect</button>
+              <button class="btn btn-sm btn-outline-success" id="btn-health" data-requires-network
+                title="Analyze the stored configuration, connections and diagnostic evidence"><i class="bi bi-heart-pulse me-1"></i>Analyze Network</button>
+              <button class="btn btn-sm btn-outline-secondary" id="btn-connections" data-requires-network><i class="bi bi-ethernet me-1"></i>Connections</button>
+              <button class="btn btn-sm btn-outline-primary d-none" id="btn-device-access" data-requires-network><i class="bi bi-key me-1"></i>Device Access</button>
+              <button class="btn btn-sm btn-outline-primary d-none" id="btn-collect" data-requires-network data-requires-modify
+                title="Read the running configuration of routers and switches (show commands only)"><i class="bi bi-download me-1"></i>Collect Configs</button>
+              <button class="btn btn-sm btn-outline-primary" id="btn-report" data-requires-network><i class="bi bi-file-earmark-text me-1"></i>Save Report</button>
+              <span class="divider"></span>
+              <button class="btn btn-sm btn-light border" id="btn-layout" data-requires-network title="Auto-arrange devices"><i class="bi bi-diagram-2"></i></button>
+              <button class="btn btn-sm btn-light border" id="btn-reload" data-requires-network title="Reload topology from database"><i class="bi bi-arrow-clockwise"></i></button>
+              <button class="btn btn-sm btn-outline-secondary" id="btn-details-toggle" aria-controls="side-panel" aria-expanded="true" title="Hide details panel"><i class="bi bi-layout-sidebar-reverse me-1" aria-hidden="true"></i><span>Hide Details</span></button>
+            </div>
+            <div class="ng-palette">
+              <span class="ng-type-badge ng-environment-badge" id="environment-badge">Manual model</span>
+              <span class="ng-palette-label">Add</span>
+              <div class="d-flex flex-wrap gap-2" id="palette"></div>
+              <div class="ms-auto d-flex align-items-center gap-2">
+                <span class="ng-save-state" id="save-state">Saved</span>
+                <button class="btn btn-sm btn-primary" id="btn-save" data-requires-network><i class="bi bi-save me-1"></i>Save Topology</button>
+              </div>
+            </div>
+            <div class="ng-canvas-wrap">
+              <div id="cy" role="application" aria-label="Topology canvas"></div>
+              <div class="ng-canvas-banner d-none" id="connect-banner">
+                <i class="bi bi-bezier2"></i><span id="connect-banner-text">Select the source device</span>
+                <button class="btn btn-light" id="btn-connect-cancel">Cancel</button>
+              </div>
+              <div class="ng-canvas-empty d-none" id="canvas-empty"></div>
+              <details class="ng-map-legend" id="map-legend">
+                <summary>Map legend</summary>
+                <div class="ng-legend-heading">Line pattern = evidence</div>
+                <div><span class="sw copper"></span>Confirmed (LLDP) / modeled · copper</div>
+                <div><span class="sw fibre"></span>Confirmed · fibre (SFP)</div>
+                <div><span class="sw inferred"></span>Inferred (MAC table, one-sided CDP, spanning tree)</div>
+                <div><span class="sw wireless"></span>Wireless (Wi-Fi association or AP radio)</div>
+                <div><span class="sw logical"></span>Logical (same subnet / gateway / route hop)</div>
+                <div class="ng-legend-heading">Line colour = state</div>
+                <div><span class="sw blocked"></span>Blocked (STP)</div>
+                <div><span class="sw down"></span>Down</div>
+                <div class="ng-legend-heading">Device border = discovery</div>
+                <div><span class="nd full"></span>Fully analyzed</div>
+                <div><span class="nd partial"></span>Partially analyzed</div>
+                <div><span class="nd auth"></span>Authentication required</div>
+                <div><span class="nd failed"></span>Authentication failed</div>
+                <div><span class="nd unverified"></span>Unknown or unverified</div>
+                <div class="small text-muted-ng">"Unknown Port": the port was not reported by any evidence.</div>
+              </details>
+              <div class="ng-legend d-none" id="analysis-legend">
+                <div><span class="sw" id="legend-path"></span><span id="legend-path-label">Affected path</span></div>
+                <div><span class="sw" style="border-color:#c62f2f"></span>Failure point</div>
+                <div><span class="sw dashed" style="border-color:#8492a6"></span>Unaffected</div>
+              </div>
+              <div class="ng-zoom">
+                <button id="btn-zoom-in" title="Zoom in" aria-label="Zoom in"><i class="bi bi-plus-lg"></i></button>
+                <button id="btn-zoom-out" title="Zoom out" aria-label="Zoom out"><i class="bi bi-dash-lg"></i></button>
+                <button id="btn-fit" title="Fit to screen" aria-label="Fit to screen"><i class="bi bi-arrows-fullscreen"></i></button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Device / Analysis panel -->
+          <aside class="ng-panel-col" id="side-panel" aria-label="Device and analysis panel"></aside>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Add / Edit device -->
+  <div class="modal fade" id="device-modal" tabindex="-1" aria-labelledby="device-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form class="modal-content" id="device-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="device-modal-title">Add Device</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-danger py-2 small d-none" role="alert" data-form-error></div>
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label class="form-label" for="dev-name">Device Name <span class="text-danger">*</span></label>
+              <input class="form-control" id="dev-name" name="name" maxlength="64" required placeholder="e.g. R1">
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label" for="dev-type">Device Type <span class="text-danger">*</span></label>
+              <select class="form-select" id="dev-type" name="device_type" required></select>
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label" for="dev-vendor">Vendor</label>
+              <input class="form-control" id="dev-vendor" name="vendor" maxlength="64" placeholder="e.g. Cisco">
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label" for="dev-model">Model</label>
+              <input class="form-control" id="dev-model" name="model" maxlength="64" placeholder="e.g. Generic Router">
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label" for="dev-mgmt">Management IP</label>
+              <input class="form-control mono" id="dev-mgmt" name="management_ip" placeholder="e.g. 192.168.1.1">
+              <div class="form-text">IPv4 address. Optional.</div>
+            </div>
+            <div class="col-sm-6" data-host-only>
+              <label class="form-label" for="dev-gateway">Default Gateway</label>
+              <input class="form-control mono" id="dev-gateway" name="default_gateway" placeholder="e.g. 10.20.0.1">
+              <div class="form-text">PCs and servers only.</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="device-submit">Save Device</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Device configuration (interfaces, VLANs, static routes, ACL) -->
+  <div class="modal fade" id="config-modal" tabindex="-1" aria-labelledby="config-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="config-modal-title">Configuration</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <ul class="nav nav-tabs ng-config-tabs mb-3" id="config-tabs" role="tablist"></ul>
+          <div id="config-panes"></div>
+          <p class="form-text mb-0 mt-3">Edit the configuration here, or build the whole network from Cisco show output with Networks → Import Configs.</p>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Done</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Required flows (network intents) -->
+  <div class="modal fade" id="intent-modal" tabindex="-1" aria-labelledby="intent-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="intent-modal-title">Required Flows</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="small text-muted-ng">Required flows describe traffic that must work (<strong>allow</strong>) or must stay isolated
+            (<strong>deny</strong>). NetGuard checks every proposed change against them. When none are defined, all host-to-host
+            connectivity that works today is treated as required.</p>
+          <div id="intent-section"></div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Done</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Propose change -->
+  <div class="modal fade" id="change-modal" tabindex="-1" aria-labelledby="change-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+      <form class="modal-content" id="change-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="change-modal-title">Propose Network Change</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-danger py-2 small d-none" role="alert" data-form-error></div>
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">Device</label>
+              <div class="form-control bg-light fw-semibold" id="chg-device-name">—</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label" for="chg-category">Category</label>
+              <select class="form-select" id="chg-category"></select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label" for="chg-type">Change Type</label>
+              <select class="form-select" id="chg-type"></select>
+            </div>
+            <div class="col-md-4" id="chg-interface-wrap">
+              <label class="form-label" for="chg-interface">Interface</label>
+              <select class="form-select" id="chg-interface"></select>
+            </div>
+            <div class="col-md-8">
+              <label class="form-label">Current Value</label>
+              <div class="form-control bg-light mono" id="chg-current">—</div>
+            </div>
+            <div class="col-12"><div class="ng-crud-form"><div class="small fw-semibold mb-2">Proposed Value</div>
+              <div class="row g-2" id="chg-fields"></div></div></div>
+            <div class="col-12">
+              <label class="form-label" for="chg-reason">Reason</label>
+              <input class="form-control" id="chg-reason" maxlength="1000" placeholder="e.g. Network redesign">
+            </div>
+          </div>
+          <p class="form-text mt-3 mb-0"><i class="bi bi-info-circle me-1"></i>NetGuard analyses the change against a copy of the
+            network. Nothing is deployed and the saved topology is not modified.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="change-submit"><i class="bi bi-lightning-charge me-1"></i>Analyze Change</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add link -->
+  <div class="modal fade" id="link-modal" tabindex="-1" aria-labelledby="link-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form class="modal-content" id="link-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="link-modal-title">Connect Devices</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-danger py-2 small d-none" role="alert" data-form-error></div>
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label" for="link-src-dev">Source Device</label>
+              <select class="form-select" id="link-src-dev" name="source_device_id" required></select>
+            </div>
+            <div class="col-6">
+              <label class="form-label" for="link-src-if">Source Interface</label>
+              <select class="form-select" id="link-src-if" name="source_interface_id"></select>
+            </div>
+            <div class="col-12 text-center text-muted-ng"><i class="bi bi-arrow-down-up"></i></div>
+            <div class="col-6">
+              <label class="form-label" for="link-dst-dev">Destination Device</label>
+              <select class="form-select" id="link-dst-dev" name="destination_device_id" required></select>
+            </div>
+            <div class="col-6">
+              <label class="form-label" for="link-dst-if">Destination Interface</label>
+              <select class="form-select" id="link-dst-if" name="destination_interface_id"></select>
+            </div>
+          </div>
+          <div class="form-text mt-3" id="link-hint">Interfaces already connected to another link are not available.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="link-submit"><i class="bi bi-share me-1"></i>Create Link</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js" defer></script>
+  <script src="/static/vendor/cytoscape/cytoscape.min.js" defer></script>
+  <script src="/static/vendor/xterm/xterm.js" defer></script>
+  <script src="/static/vendor/xterm/addon-fit.js" defer></script>
+  <script type="module" src="/static/js/pages/topology.js"></script>
+</body>
+</html>

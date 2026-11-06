@@ -1,0 +1,7 @@
+{
+  "granted_permissions": [
+    "change.execute_production",
+    "device.terminal",
+    "device.terminal_config"
+  ]
+}

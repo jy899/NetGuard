@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Networks · NetGuard</title>
+  <link rel="icon" href="/static/assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/css/netguard.css">
+</head>
+<body>
+  <div class="ng-app">
+    <aside class="ng-sidebar" id="ng-sidebar"></aside>
+    <div class="ng-main">
+      <header class="ng-topbar" id="ng-topbar"></header>
+      <main class="ng-content">
+        <div class="ng-page-header">
+          <div>
+            <h2>Networks</h2>
+            <p>Import an EVE-NG or GNS3 lab, discover an authorised network range or import configurations, then investigate in one topology workspace.</p>
+          </div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-primary" id="btn-import" title="Build a network from Cisco IOS show output">
+              <i class="bi bi-upload me-1"></i>Import Configs</button>
+            <button class="btn btn-primary" id="btn-new-network"><i class="bi bi-plus-lg me-1"></i>New Network</button>
+          </div>
+        </div>
+        <ul class="nav nav-pills gap-2 mb-4" role="tablist" aria-label="Network environments">
+          <li class="nav-item"><button class="nav-link active" id="virtual-tab" data-bs-toggle="pill" data-bs-target="#virtual-panel" type="button" role="tab" aria-controls="virtual-panel" aria-selected="true">Virtual Lab</button></li>
+          <li class="nav-item"><button class="nav-link" id="real-tab" data-bs-toggle="pill" data-bs-target="#real-panel" type="button" role="tab" aria-controls="real-panel" aria-selected="false">Real Network</button></li>
+          <li class="nav-item"><button class="nav-link" id="saved-tab" data-bs-toggle="pill" data-bs-target="#saved-panel" type="button" role="tab" aria-controls="saved-panel" aria-selected="false">Saved Networks <span id="network-count" class="ms-1">0</span></button></li>
+        </ul>
+        <div class="tab-content">
+          <section class="tab-pane fade show active" id="virtual-panel" role="tabpanel" aria-labelledby="virtual-tab">
+            <div class="d-flex justify-content-between align-items-center mb-3"><h3 class="h5 mb-0">Virtual laboratories</h3><span class="badge text-bg-light border">EVE-NG · GNS3</span></div>
+            <div class="ng-card p-4 mb-3"><div class="row g-3 align-items-end"><div class="col-md-9"><label class="form-label" for="virtual-project">Laboratory workspace</label><select id="virtual-project" class="form-select"><option value="new">Import a new laboratory</option></select></div><div class="col-md-3"><button id="virtual-open" class="btn btn-primary w-100" disabled>Open Topology</button></div></div><p id="virtual-project-summary" class="small text-muted-ng mt-2 mb-0">Select a saved laboratory workspace or import a lab from an EVE-NG or GNS3 server below.</p></div>
+            <div id="virtual-new-options" class="row g-3 mb-4">
+              <div class="col-md-6"><div class="ng-card p-4 h-100"><i class="bi bi-hdd-network text-primary fs-3"></i><h4 class="h5 mt-3">EVE-NG</h4><p class="small text-muted-ng">Sign in to your EVE-NG server, choose a lab and import its nodes, cables and startup configurations.</p><button class="btn btn-outline-primary w-100" data-provider="eve-ng">Connect to EVE-NG</button></div></div>
+              <div class="col-md-6"><div class="ng-card p-4 h-100"><i class="bi bi-bezier2 text-primary fs-3"></i><h4 class="h5 mt-3">GNS3</h4><p class="small text-muted-ng">Connect to a GNS3 server (default port 3080), choose a project and import its nodes, links and consoles.</p><button class="btn btn-outline-primary w-100" data-provider="gns3">Connect to GNS3</button></div></div>
+            </div>
+            <div class="ng-card p-4 mb-4 d-none" id="provider-box"><form id="provider-form"><div class="d-flex justify-content-between"><h4 class="h5" id="provider-title">Lab connection</h4><button type="button" id="provider-cancel" class="btn-close ms-auto" aria-label="Close connection form"></button></div><div class="alert alert-danger py-2 small d-none" data-form-error role="alert"></div>
+              <div class="row g-3"><div class="col-md-4"><label class="form-label" for="provider-server">Server address</label><input id="provider-server" name="server" class="form-control" maxlength="200" placeholder="http://192.168.56.10" required></div><div class="col-md-3"><label class="form-label" for="provider-user">Username</label><input id="provider-user" name="username" class="form-control" autocomplete="off"></div><div class="col-md-3"><label class="form-label" for="provider-password">Password</label><input type="password" id="provider-password" name="password" class="form-control" autocomplete="off"></div><div class="col-md-2 d-flex align-items-end"><button class="btn btn-primary w-100" id="provider-connect">Connect</button></div></div>
+</form><div id="provider-labs" class="mt-3" aria-live="polite"></div></div>
+            <div class="ng-card p-4 mb-4"><div class="d-flex justify-content-between align-items-center gap-3 flex-wrap"><div><h4 class="h6 mb-1">Example networks</h4><p class="small text-muted-ng mb-0">Offline example configurations for learning the analysis workflow. No device or server is contacted.</p></div><div class="d-flex gap-2"><select id="example-scenario" class="form-select form-select-sm" aria-label="Example network"><option value="mixed">Multiple incidents</option><option value="healthy">Healthy baseline</option><option value="vlan">VLAN incident</option><option value="routing">Routing incident</option><option value="interface">Interface shutdown</option><option value="acl">Firewall / ACL incident</option><option value="loop">Switching loop</option><option value="missing-link">Missing connection</option><option value="ip-conflict">IP address conflict</option></select><button class="btn btn-outline-secondary btn-sm text-nowrap" id="btn-example">Create Example</button></div></div></div>
+          </section>
+          <section class="tab-pane fade" id="real-panel" role="tabpanel" aria-labelledby="real-tab">
+            <div class="ng-card p-4 mb-3">
+              <form id="scan-form" novalidate>
+                <div class="row g-2 align-items-end">
+                  <div class="col-lg-4"><label class="form-label" for="scan-interface">Network adapter</label><select id="scan-interface" class="form-select"><option value="custom">Detecting…</option></select></div>
+                  <div class="col-lg-5"><label class="form-label" for="scan-target">Range</label><input id="scan-target" class="form-control mono" placeholder="192.168.1.0/24" maxlength="43" aria-describedby="scan-note"></div>
+                  <div class="col-lg-3"><button class="btn btn-primary w-100" id="scan-start"><i class="bi bi-radar me-1"></i>Scan</button></div>
+                </div>
+                <details class="mt-3" id="scan-options"><summary class="small fw-semibold">Options</summary>
+                  <div class="row g-2 mt-1">
+                    <div class="col-md-6"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="scan-auto" checked><label class="form-check-label small" for="scan-auto">Try my saved credential profiles</label></div>
+                      <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="scan-follow" checked><label class="form-check-label small" for="scan-follow">Follow neighbours into other private subnets (up to 3 hops)</label></div></div>
+                    <div class="col-md-3"><label class="form-label small" for="scan-excluded">Exclude</label><input id="scan-excluded" class="form-control form-control-sm mono" placeholder="192.168.1.5, 192.168.1.200/29" maxlength="600"></div>
+                    <div class="col-md-3"><label class="form-label small" for="scan-untrusted">Untrusted segments</label><input id="scan-untrusted" class="form-control form-control-sm mono" placeholder="192.168.50.0/24" maxlength="600"></div>
+                  </div></details>
+                <p class="small text-muted-ng mt-2 mb-0" id="scan-note">Scan only networks you are authorised to scan; starting a scan records that authorisation. Discovery is read-only.</p>
+                <div class="alert alert-danger small py-2 mt-2 mb-0 d-none" id="scan-error" role="alert"></div>
+              </form>
+              <div id="scan-progress" class="mt-3 d-none" role="status" aria-live="polite">
+                <div class="d-flex justify-content-between small mb-1"><span id="scan-progress-label">Starting…</span><span id="scan-progress-count" class="text-muted-ng"></span></div>
+                <div class="progress" style="height:6px"><div class="progress-bar progress-bar-striped progress-bar-animated" id="scan-progress-bar" style="width:0%"></div></div>
+              </div>
+            </div>
+            <div id="scan-result" class="d-none">
+              <div class="ng-card p-4 mb-3">
+                <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap mb-3"><div><h4 class="h5 mb-1" id="scan-result-title">Discovery</h4>
+                  <div id="scan-summary" class="d-flex flex-wrap gap-3 small align-items-center"></div></div>
+                  <a id="scan-open-topology" class="btn btn-primary"><i class="bi bi-diagram-3 me-1"></i>Open Topology</a></div>
+                <div id="scan-credentials" class="border rounded p-3 mb-3 d-none"></div>
+                <div id="scan-table"></div>
+              </div>
+            </div>
+          </section>
+          <section class="tab-pane fade" id="saved-panel" role="tabpanel" aria-labelledby="saved-tab"><div class="ng-card" id="network-list"></div></section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="modal fade" id="network-modal" tabindex="-1" aria-labelledby="network-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form class="modal-content" id="network-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="network-modal-title">New Network</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-danger py-2 small d-none" role="alert" data-form-error></div>
+          <div class="mb-3">
+            <label class="form-label" for="net-name">Name <span class="text-danger">*</span></label>
+            <input class="form-control" id="net-name" name="name" maxlength="100" required placeholder="e.g. HQ Enterprise Network">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="net-type">Type</label>
+            <select class="form-select" id="net-type" name="network_type">
+              <option>Enterprise</option><option>Campus</option><option>Data Center</option>
+              <option>Branch</option><option>Lab</option><option>Other</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label" for="net-description">Description</label>
+            <textarea class="form-control" id="net-description" name="description" rows="3" maxlength="1000"
+              placeholder="Optional description"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="network-submit">Save Network</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal fade" id="import-modal" tabindex="-1" aria-labelledby="import-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <form class="modal-content" id="import-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="import-modal-title">Import Network</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-danger py-2 small d-none" role="alert" data-form-error></div>
+          <div class="row g-3 mb-2">
+            <div class="col-md-4">
+              <label class="form-label" for="imp-name">Network name</label>
+              <input class="form-control" id="imp-name" name="name" maxlength="100" placeholder="From the project name">
+            </div>
+          </div>
+          <div class="ng-dropzone border rounded p-4 text-center" id="imp-drop" tabindex="0">
+            <i class="bi bi-cloud-arrow-up fs-2 text-primary" aria-hidden="true"></i>
+            <div class="fw-semibold mt-1">Drop project or configuration files here</div>
+            <div class="small text-muted-ng">Cisco Packet Tracer <code>.pkt</code> <code>.pka</code> · GNS3 <code>.gns3</code> <code>.gns3project</code> · EVE-NG <code>.unl</code> <code>.zip</code> · device configurations <code>.cfg</code> <code>.txt</code> <code>.conf</code> (several files or a <code>.zip</code>)</div>
+            <label class="btn btn-primary btn-sm mt-3 mb-0" for="imp-project"><i class="bi bi-folder2-open me-1"></i>Choose Files</label>
+            <input type="file" id="imp-project" class="d-none" multiple accept=".pkt,.pka,.gns3,.gns3project,.gns3p,.unl,.zip,.xml,.cfg,.txt,.conf,.ios,.log">
+            <div class="small mt-2" id="imp-project-list" aria-live="polite"></div>
+            <div class="small text-muted-ng mt-2">Devices, cables, startup configurations and endpoint addresses are read from the project. Required flows come from the project's scenarios or are inferred from the analysis expectations; you can edit them afterwards.</div>
+          </div>
+          <div class="mt-3 d-none" id="imp-single" role="status"></div>
+          <details class="mt-3" id="imp-paste"><summary class="small fw-semibold">Paste configurations instead</summary>
+          <p class="small text-muted-ng mt-2 mb-3">Paste the output of <code>show running-config</code> (and optionally
+            <code>show cdp neighbors</code>) from each Cisco IOS or IOS-XE device, or the <code>vtysh</code> running
+            configuration of an FRRouting router.</p>
+          <div class="row g-3">
+            <div class="col-12 d-flex gap-2 flex-wrap">
+              <button type="button" class="btn btn-light border btn-sm" id="imp-sample"><i class="bi bi-lightning me-1"></i>Load example configurations</button>
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="imp-configs">Device output <span class="text-danger">*</span></label>
+              <textarea class="form-control font-monospace small" id="imp-configs" name="configs" rows="9" spellcheck="false"
+                placeholder="R1#show running-config&#10;hostname R1&#10;interface GigabitEthernet0/0&#10; ip address 10.0.12.1 255.255.255.252&#10;..."></textarea>
+            </div>
+            <div class="col-lg-6">
+              <label class="form-label" for="imp-endpoints">PCs, servers and internet (optional)</label>
+              <textarea class="form-control font-monospace small" id="imp-endpoints" name="endpoints" rows="5" spellcheck="false"
+                placeholder="name, pc|server|internet, ip/prefix, gateway, device interface&#10;Finance-PC, pc, 10.20.0.10/24, 10.20.0.1, SW1 Gi1/0/1"></textarea>
+            </div>
+            <div class="col-lg-6">
+              <label class="form-label" for="imp-flows">Required flows (optional)</label>
+              <textarea class="form-control font-monospace small" id="imp-flows" name="flows" rows="5" spellcheck="false"
+                placeholder="name, source, destination, ip|tcp|udp|icmp, port, allow|deny, criticality&#10;Finance ERP, Finance-PC, ERP, tcp, 443, allow, critical"></textarea>
+            </div>
+            <div class="col-12 d-flex gap-2"><button type="button" class="btn btn-outline-primary btn-sm" id="imp-check"><i class="bi bi-search me-1"></i>Preview</button><button type="button" class="btn btn-primary btn-sm" id="imp-paste-submit"><i class="bi bi-upload me-1"></i>Import Pasted Configurations</button></div>
+          </div></details>
+          <div class="mt-3 d-none" id="imp-preview"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="imp-submit" disabled><i class="bi bi-upload me-1"></i>Import Files and Open</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal fade" id="device-modal" tabindex="-1" aria-labelledby="device-modal-title" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 id="device-modal-title" class="modal-title">Device details</h5><button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Close"></button></div><div class="modal-body" id="device-details"></div></div></div></div>
+
+  <script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js" defer></script>
+  <script type="module" src="/static/js/pages/networks.js"></script>
+</body>
+</html>

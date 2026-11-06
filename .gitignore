@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+data/netguard.db
+data/.secret_key
+data/webview/
+.DS_Store
+*.log

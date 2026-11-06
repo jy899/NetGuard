@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reports &amp; History · NetGuard</title>
+  <link rel="icon" href="/static/assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/css/netguard.css">
+</head>
+<body>
+  <div class="ng-app">
+    <aside class="ng-sidebar" id="ng-sidebar"></aside>
+    <div class="ng-main">
+      <header class="ng-topbar" id="ng-topbar"></header>
+      <main class="ng-content">
+        <div id="report-list-view">
+          <div class="ng-page-header">
+            <div>
+              <h2>Reports &amp; History</h2>
+              <p>Discovery results, network analyses and change assessments.</p>
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+              <select class="form-select form-select-sm" id="filter-network" style="min-width:220px" aria-label="Network"></select>
+              <select class="form-select form-select-sm" id="filter-kind" aria-label="Record type"><option value="">All record types</option><option value="scan">Network scans</option><option value="analysis">Network analyses</option><option value="report">Analysis reports</option><option value="assessment">Change assessments</option></select>
+              <div class="btn-group btn-group-sm" role="group" aria-label="History scope">
+                <input type="radio" class="btn-check" name="scope" id="scope-saved" value="saved" checked>
+                <label class="btn btn-outline-primary" for="scope-saved">Saved</label>
+                <input type="radio" class="btn-check" name="scope" id="scope-all" value="all">
+                <label class="btn btn-outline-primary" for="scope-all">All analyses</label>
+              </div>
+            </div>
+          </div>
+          <div class="ng-card" id="report-list"></div>
+        </div>
+        <div id="report-detail-view" class="d-none"></div>
+      </main>
+    </div>
+  </div>
+  <script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js" defer></script>
+  <script type="module" src="/static/js/pages/reports.js"></script>
+</body>
+</html>

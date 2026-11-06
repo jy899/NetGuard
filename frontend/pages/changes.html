@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Validation &amp; Changes · NetGuard</title>
+  <link rel="icon" href="/static/assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/css/netguard.css">
+</head>
+<body>
+  <div class="ng-app">
+    <aside class="ng-sidebar" id="ng-sidebar"></aside>
+    <div class="ng-main">
+      <header class="ng-topbar" id="ng-topbar"></header>
+      <main class="ng-content">
+        <div class="ng-page-header">
+          <div>
+            <h2>Validation &amp; Changes</h2>
+            <p>Compare proposed changes with the stored baseline and review their impact before deployment.</p>
+          </div>
+          <div class="d-flex gap-2 align-items-center ng-no-print">
+            <label class="visually-hidden" for="filter-network">Network</label>
+            <select class="form-select form-select-sm" id="filter-network" style="min-width:220px"></select>
+            <label class="visually-hidden" for="filter-status">Status</label>
+            <select class="form-select form-select-sm" id="filter-status" style="min-width:150px">
+              <option value="">All statuses</option><option value="draft">Draft</option>
+              <option value="analyzed">Validated</option><option value="saved">Saved</option>
+              <option value="pending_approval">Awaiting approval</option><option value="approved">Approved</option>
+              <option value="rejected">Rejected</option><option value="applied">Applied</option>
+              <option value="rolled_back">Rolled back</option><option value="failed">Rollback failed</option>
+            </select>
+            <a class="btn btn-sm btn-primary text-nowrap" href="/topology"><i class="bi bi-lightning-charge me-1"></i>Propose in Workspace</a>
+          </div>
+        </div>
+        <ul class="nav nav-tabs ng-section-tabs mb-3" role="tablist">
+          <li class="nav-item" role="presentation"><button class="nav-link active" id="changes-tab" data-bs-toggle="tab" data-bs-target="#changes-pane" type="button" role="tab" aria-controls="changes-pane" aria-selected="true">Proposed Changes</button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" id="validation-tab" data-bs-toggle="tab" data-bs-target="#validation-pane" type="button" role="tab" aria-controls="validation-pane" aria-selected="false">Validation Results</button></li>
+          <li class="nav-item" role="presentation"><button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#rules-pane" type="button" role="tab" aria-controls="rules-pane" aria-selected="false">Validation Rules</button></li>
+        </ul>
+        <div class="tab-content">
+          <section class="tab-pane fade show active" id="changes-pane" role="tabpanel" aria-labelledby="changes-tab" tabindex="0"><div class="ng-card" id="change-list"></div></section>
+          <section class="tab-pane fade" id="validation-pane" role="tabpanel" aria-labelledby="validation-tab" tabindex="0">
+            <div class="row g-3">
+              <div class="col-xxl-7"><div class="ng-card h-100"><div class="ng-card-header"><h3>Validation History</h3><span class="small text-muted-ng" id="run-count"></span></div><div id="run-list"></div></div></div>
+              <div class="col-xxl-5"><div class="ng-card h-100"><div class="ng-card-header"><h3>Selected Validation</h3><span id="run-badge"></span></div><div class="ng-card-body" id="run-checks"><p class="small text-muted-ng mb-0">Select a run to see its results.</p></div></div></div>
+            </div>
+          </section>
+          <section class="tab-pane fade" id="rules-pane" role="tabpanel" aria-labelledby="rules-tab" tabindex="0"><div class="ng-card"><div class="ng-card-header"><h3>Rule Library</h3><span class="small text-muted-ng">Stored-model checks</span></div><div id="rule-list"></div></div></section>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js" defer></script>
+  <script type="module" src="/static/js/pages/changes.js"></script>
+</body>
+</html>

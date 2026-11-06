@@ -1,0 +1,286 @@
+{
+  "model_version": 1,
+  "trained_at": "2026-11-06T01:03:29Z",
+  "trained_seconds": 41.6,
+  "dataset": {
+    "generator_version": 1,
+    "seed": 2026,
+    "synthetic_campuses": 90,
+    "example_networks": 9,
+    "changes_per_network": 45,
+    "counts": {
+      "change_outcomes": 4326,
+      "root_cause": 1894,
+      "fix_outcomes": 1311,
+      "link_faults": 3723,
+      "syslog": 4950,
+      "device_profiles": 740
+    },
+    "feature_names": [
+      "type:access_vlan",
+      "type:acl_add",
+      "type:acl_reference",
+      "type:acl_remove",
+      "type:default_gateway",
+      "type:interface_settings",
+      "type:interface_status",
+      "type:ip_address",
+      "type:isolate_endpoint",
+      "type:mgmt_hardening",
+      "type:ospf_area",
+      "type:ospf_network",
+      "type:physical_remediation",
+      "type:static_route",
+      "type:stp_root",
+      "type:trunk_settings",
+      "type:vlan_database",
+      "category:ip_interface",
+      "category:routing",
+      "category:acl",
+      "category:vlan",
+      "category:security",
+      "category:physical",
+      "effective",
+      "dev_router",
+      "dev_l3_switch",
+      "dev_l2_switch",
+      "dev_firewall",
+      "dev_host",
+      "dev_degree",
+      "dev_infra_degree",
+      "dev_path_share",
+      "dev_critical_paths",
+      "dev_is_cut_vertex",
+      "iface_present",
+      "iface_linked",
+      "iface_to_infra",
+      "iface_to_host",
+      "iface_trunk",
+      "iface_access",
+      "iface_routed",
+      "iface_path_share",
+      "iface_link_is_bridge",
+      "iface_trunk_vlans",
+      "iface_down_proposed",
+      "net_devices",
+      "net_hosts",
+      "net_links",
+      "net_flows",
+      "net_intents",
+      "net_redundancy",
+      "acl_deny",
+      "acl_breadth",
+      "acl_any_protocol",
+      "acl_position",
+      "acl_lists_applied",
+      "route_prefix",
+      "route_default",
+      "ospf_leaves_backbone",
+      "vlan_hosts_on_port",
+      "params_count",
+      "evidence_inferred_share"
+    ],
+    "built_seconds": 432.6,
+    "provenance": "Synthetic. Topologies are generated Cisco IOS configurations and NetGuard's example networks; labels come from NetGuard's deterministic forwarding, validation and risk engines run on a copy of each model. Syslog lines follow Cisco IOS message formats with randomised fields. No field data is included."
+  },
+  "local_outcomes": 0,
+  "metrics": {
+    "change_risk": {
+      "train_rows": 3547,
+      "test_rows": 779,
+      "positive_rate": 0.659,
+      "auc": 0.98,
+      "brier": 0.0471,
+      "brier_base_rate": 0.2208,
+      "accuracy": 0.9435
+    },
+    "blast_endpoints": {
+      "train_rows": 3547,
+      "test_rows": 779,
+      "mae": 2.0448,
+      "mae_mean_baseline": 6.3478,
+      "spearman": 0.887
+    },
+    "blast_flows": {
+      "train_rows": 3547,
+      "test_rows": 779,
+      "mae": 3.8669,
+      "mae_mean_baseline": 10.8438,
+      "spearman": 0.9027
+    },
+    "root_cause": {
+      "train_rows": 1555,
+      "test_rows": 339,
+      "positive_rate": 0.666,
+      "auc": 0.9995,
+      "brier": 0.0089,
+      "brier_base_rate": 0.2242,
+      "accuracy": 0.9823,
+      "top1_accuracy": 1.0
+    },
+    "fix_ranker": {
+      "train_rows": 1081,
+      "test_rows": 230,
+      "positive_rate": 0.648,
+      "auc": 0.9243,
+      "brier": 0.0534,
+      "brier_base_rate": 0.2256,
+      "accuracy": 0.9348
+    },
+    "link_faults": {
+      "accuracy": 0.998,
+      "macro_f1": 0.995,
+      "classes": {
+        "clean": {
+          "precision": 1.0,
+          "recall": 0.996,
+          "f1": 0.998,
+          "support": 252
+        },
+        "duplex_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 83
+        },
+        "mtu_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 85
+        },
+        "native_vlan_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 9
+        },
+        "ospf_area_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 10
+        },
+        "ospf_timer_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 16
+        },
+        "physical_errors": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 91
+        },
+        "speed_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 79
+        },
+        "subnet_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 13
+        },
+        "trunk_mode_mismatch": {
+          "precision": 0.909,
+          "recall": 1.0,
+          "f1": 0.952,
+          "support": 10
+        },
+        "trunk_vlan_pruned": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 9
+        }
+      },
+      "majority_baseline_accuracy": 0.3836,
+      "train_rows": 3066,
+      "test_rows": 657
+    },
+    "syslog": {
+      "accuracy": 0.977,
+      "macro_f1": 0.982,
+      "classes": {
+        "config_change": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        },
+        "duplex_mismatch": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        },
+        "ip_conflict": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        },
+        "l2_loop": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        },
+        "link_flap": {
+          "precision": 0.796,
+          "recall": 1.0,
+          "f1": 0.887,
+          "support": 90
+        },
+        "normal": {
+          "precision": 1.0,
+          "recall": 0.872,
+          "f1": 0.932,
+          "support": 180
+        },
+        "resource": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        },
+        "routing_adjacency": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        },
+        "security_auth": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        },
+        "stp_change": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1": 1.0,
+          "support": 90
+        }
+      },
+      "majority_baseline_accuracy": 0.1818,
+      "train_rows": 3960,
+      "test_rows": 990
+    }
+  },
+  "models": [
+    "blast_endpoints",
+    "blast_flows",
+    "change_risk",
+    "fix_ranker",
+    "link_faults",
+    "peer_baselines",
+    "root_cause",
+    "syslog"
+  ],
+  "evaluation": "Held-out topologies (one in five sources by hash), never seen in training; shipped models are then refitted on all rows."
+}

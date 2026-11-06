@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · NetGuard</title>
+  <link rel="icon" href="/static/assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/vendor/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/css/netguard.css">
+</head>
+<body>
+  <div class="ng-login-page">
+    <div class="ng-login-card">
+      <div class="ng-login-head">
+        <div id="login-logo"></div>
+        <h1>NETGUARD</h1>
+      </div>
+      <div class="ng-login-body">
+        <form id="login-form" novalidate>
+          <div class="alert alert-danger py-2 small d-none" role="alert" data-form-error></div>
+          <div class="mb-3">
+            <label class="form-label" for="username">Username</label>
+            <input class="form-control" id="username" name="username" autocomplete="username" required autofocus>
+          </div>
+          <div class="mb-4">
+            <label class="form-label" for="password">Password</label>
+            <input class="form-control" id="password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+          <button class="btn btn-primary w-100" type="submit" id="login-submit">
+            Sign In
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <script src="/static/vendor/bootstrap/js/bootstrap.bundle.min.js" defer></script>
+  <script type="module" src="/static/js/pages/login.js"></script>
+</body>
+</html>
