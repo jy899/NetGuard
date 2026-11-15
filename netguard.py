@@ -28,6 +28,25 @@ else:
 
 DEFAULT_PORT = int(os.getenv("NETGUARD_PORT", "8001"))
 
+# NetGuard.exe is a window without a console: Python then has no stdout/stderr, and the web server's logging
+# fails on start ("'NoneType' object has no attribute 'isatty'"). Its output goes to data/netguard.log instead.
+WINDOWED = sys.stdout is None or sys.stderr is None
+if WINDOWED:
+    _log_dir = Path(os.environ.get("NETGUARD_DATA_DIR") or Path(__file__).resolve().parent / "data")
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log = open(_log_dir / "netguard.log", "w", encoding="utf-8", buffering=1)  # noqa: SIM115 - open for the run
+    sys.stdout = sys.stdout or _log
+    sys.stderr = sys.stderr or _log
+
+
+def _tell(message: str) -> None:
+    """Show a message: in the console, or (NetGuard.exe has none) in a Windows message box."""
+    print(message)
+    if WINDOWED and sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, "NetGuard", 0x40)
+
 
 def _admin_check(username: str | None, password: str | None) -> bool:
     from sqlalchemy import select
@@ -70,7 +89,8 @@ def _start_server(port: int):
 
     from backend.main import app
 
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False,
+                            use_colors=False)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -78,7 +98,8 @@ def _start_server(port: int):
         if server.started:
             return server, thread
         time.sleep(0.05)
-    raise SystemExit("The NetGuard service did not start.")
+    _tell("The NetGuard service did not start. Details are in data\\netguard.log.")
+    raise SystemExit(1)
 
 
 def run_desktop(port: int) -> int:
@@ -91,7 +112,7 @@ def run_desktop(port: int) -> int:
     try:
         import webview
     except ImportError:
-        print("The desktop window needs pywebview (pip install pywebview).")
+        _tell("The desktop window needs pywebview (pip install pywebview).")
         server.should_exit = True
         return 1
     from backend.core.config import DATA_DIR
@@ -130,8 +151,8 @@ def run_desktop(port: int) -> int:
     try:
         webview.start(private_mode=False, storage_path=str(DATA_DIR / "webview"))
     except Exception as exc:  # noqa: BLE001 - no GUI backend (for example Microsoft Edge WebView2 missing)
-        print(f"The desktop window could not open ({exc}). Install the Microsoft Edge WebView2 Runtime, "
-              "or enable web access and run NetGuard --server.")
+        _tell(f"The desktop window could not open ({exc}). Install the Microsoft Edge WebView2 Runtime "
+              "(free from Microsoft), then start NetGuard again.")
         return 1
     finally:
         server.should_exit = True
@@ -201,4 +222,13 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:  # noqa: BLE001 - NetGuard.exe has no console: log the error and say where it is
+        import traceback
+
+        traceback.print_exc()
+        if not WINDOWED:
+            raise
+        _tell("NetGuard stopped because of an unexpected error. Details are in data\\netguard.log.")
+        sys.exit(1)

@@ -14,6 +14,7 @@ dist/
 
 # NetGuard data created on first start: database, keys, settings, window cache, AI release history
 data/*.db
+data/*.log
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm

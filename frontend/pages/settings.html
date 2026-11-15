@@ -31,12 +31,17 @@
       <section class="tab-pane fade" id="credentials-pane" role="tabpanel" aria-labelledby="credentials-tab" tabindex="0"><div class="ng-card"><div class="ng-card-header"><h3>Device Logins</h3><button class="btn btn-sm btn-primary" id="btn-add-credential"><i class="bi bi-plus-lg me-1"></i>Add Login</button></div><div class="ng-card-body border-bottom small text-muted-ng">Logins NetGuard uses to read your devices. A scan tries them in priority order, once per device.</div><div id="credential-list"></div></div></section>
       <section class="tab-pane fade" id="ai-pane" role="tabpanel" aria-labelledby="ai-tab" tabindex="0"><div id="ai-info"><p class="small text-muted-ng mb-0">Loading…</p></div></section>
       <section class="tab-pane fade" id="security-pane" role="tabpanel" aria-labelledby="security-tab" tabindex="0">
-        <div class="ng-card ng-settings-card" id="self-healing-card"><div class="ng-card-header"><h3>Fix Safeguards</h3></div><div class="ng-card-body">
-          <p class="small text-muted-ng">Every fix is backed up, checked and undone if it fails. Who may fix is set per group under Users &amp; Groups.</p>
-          <form id="self-healing-form" class="row g-3 align-items-end" novalidate>
-            <div class="col-sm-4"><label class="form-label" for="sh-minutes">Confirm within (minutes)</label><input class="form-control" id="sh-minutes" type="number" min="2" max="60"></div>
-            <div class="col-sm-4"><label class="form-label" for="sh-level">Highest risk allowed</label><select class="form-select" id="sh-level"><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option></select></div>
-            <div class="col-sm-4"><div class="form-check"><input class="form-check-input" type="checkbox" id="sh-timer"><label class="form-check-label small" for="sh-timer">Device revert timer</label></div><div class="form-check"><input class="form-check-input" type="checkbox" id="sh-reach"><label class="form-check-label small" for="sh-reach">Reachability check</label></div></div>
+        <div class="ng-card ng-settings-card" id="self-healing-card"><div class="ng-card-header"><h3>Real-Network Fix Safeguards</h3></div><div class="ng-card-body">
+          <p class="small text-muted-ng">Extra protection when NetGuard fixes a real device. Practice networks and lab devices are always checked and undone if the check fails. Who may fix is set per group under Users &amp; Groups.</p>
+          <form id="self-healing-form" class="row g-3" novalidate>
+            <div class="col-md-6"><label class="form-label" for="sh-minutes">Confirm within (minutes)</label><input class="form-control" id="sh-minutes" type="number" min="2" max="60">
+              <div class="form-text">After a fix you confirm it still works. No confirmation in time: NetGuard undoes it.</div></div>
+            <div class="col-md-6"><label class="form-label" for="sh-level">Highest risk allowed</label><select class="form-select" id="sh-level"><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option></select>
+              <div class="form-text">Fixes rated above this risk are blocked; apply them by hand in a maintenance window.</div></div>
+            <div class="col-md-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="sh-timer"><label class="form-check-label" for="sh-timer">Device revert timer</label>
+              <div class="form-text">The device also schedules its own undo, in case NetGuard loses the connection.</div></div></div>
+            <div class="col-md-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="sh-reach"><label class="form-check-label" for="sh-reach">Reachability check</label>
+              <div class="form-text">Before and after a fix, NetGuard checks the device and its neighbours still answer.</div></div></div>
             <div class="col-12"><button class="btn btn-primary btn-sm" type="submit" id="sh-save">Save</button> <span class="small text-muted-ng" id="sh-status"></span></div>
           </form></div></div>
         <div class="ng-card ng-settings-card mt-3"><div class="ng-card-header"><h3>Protection</h3></div><div class="ng-card-body"><div class="d-flex flex-wrap gap-2" id="security-info"></div></div></div></section>

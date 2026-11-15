@@ -626,3 +626,10 @@ body.ng-lacks-credentials-manage #btn-add-credential, body.ng-lacks-credentials-
 .ng-option-check:has(.form-check-input:checked) { border-color: var(--ng-primary); background: var(--ng-primary-soft); }
 .ng-practice-group > summary { padding: 14px 16px; }
 .ng-practice-group:not([open]) > summary:hover { background: var(--ng-surface-alt); }
+/* Network picker: × removes a network */
+.ng-picker-item { position: relative; height: 100%; }
+.ng-picker-item > .ng-picker-card { height: 100%; padding-right: 40px; }
+.ng-picker-remove { position: absolute; top: 8px; right: 8px; z-index: 2; width: 28px; height: 28px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--ng-text-muted, #667085); display: flex; align-items: center; justify-content: center; font-size: 13px; }
+.ng-picker-remove:hover, .ng-picker-remove:focus-visible { background: #fdecec; color: #c62f2f; }
+body.ng-lacks-network-edit .ng-picker-remove { display: none; }

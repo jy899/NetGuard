@@ -771,6 +771,7 @@ function showNetworkPicker(networks) {
   clearTopology();
   setNetworkControlsEnabled(false);
   setPageTitle("Network Topology Workspace", "Choose a network");
+  ui.networkSelect.querySelector("[data-placeholder]")?.remove();
   ui.networkSelect.insertAdjacentHTML("afterbegin", '<option value="" data-placeholder>Choose a network…</option>');
   ui.networkSelect.value = "";
   ui.networkSelect.disabled = false;
@@ -782,20 +783,50 @@ function showNetworkPicker(networks) {
       <div><h3 class="h5 mb-1">Choose a network</h3><p class="small text-muted-ng mb-0">Pick the network you want to view, analyse or fix.</p></div>
       <a class="btn btn-sm btn-light border" href="/networks"><i class="bi bi-plus-lg me-1"></i>Add Network</a>
     </div>
+    ${sorted.length ? "" : `<div class="ng-empty ng-card"><i class="bi bi-diagram-3"></i><h4>No networks yet</h4>
+      <p>Import a lab, scan your network or open a practice network.</p><a class="btn btn-sm btn-primary" href="/networks">Add Network</a></div>`}
     <div class="row g-3">${sorted.map((n) => `
-      <div class="col-md-6 col-xl-4"><a class="ng-card ng-picker-card" href="/topology?network=${n.id}" data-open-network="${n.id}">
+      <div class="col-md-6 col-xl-4"><div class="ng-picker-item">
+        <button type="button" class="ng-picker-remove" data-delete-network="${n.id}" title="Delete network" aria-label="Delete ${escapeHtml(n.name)}"><i class="bi bi-x-lg"></i></button>
+        <a class="ng-card ng-picker-card" href="/topology?network=${n.id}" data-open-network="${n.id}">
         <span class="ng-practice-icon"><i class="bi bi-diagram-3"></i></span>
         <span class="ng-picker-text">
           <span class="d-flex align-items-center gap-2 flex-wrap"><span class="fw-semibold">${escapeHtml(n.name)}</span>${n.id === last ? '<span class="ng-count ok">Last opened</span>' : ""}</span>
           <span class="d-block small text-muted-ng mt-1">${escapeHtml(environmentLabel(n))} · ${n.device_count} device${n.device_count === 1 ? "" : "s"} · ${n.link_count} link${n.link_count === 1 ? "" : "s"}</span>
           <span class="d-block small text-muted-ng">Updated ${formatDate(n.updated_at)}</span>
-        </span></a></div>`).join("")}
+        </span></a></div></div>`).join("")}
     </div>`;
   picker.classList.remove("d-none");
   picker.querySelectorAll("[data-open-network]").forEach((card) => card.addEventListener("click", (event) => {
     event.preventDefault();
     openNetwork(Number(card.dataset.openNetwork));
   }));
+  picker.querySelectorAll("[data-delete-network]").forEach((button) => button.addEventListener("click", () => {
+    const network = networks.find((n) => n.id === Number(button.dataset.deleteNetwork));
+    if (network) deleteNetworkFromPicker(network, button);
+  }));
+}
+
+/** The × on a picker card: delete the whole network after a clear confirmation (it cannot be undone). */
+async function deleteNetworkFromPicker(network, button) {
+  const ok = await confirmDialog({
+    title: "Delete this network?",
+    message: `<p>Delete <strong>${escapeHtml(network.name)}</strong> and everything in it: ${network.device_count} device(s),
+      ${network.link_count} link(s), its changes, reports and history.</p><p class="small text-danger mb-0">This cannot be undone.</p>`,
+    confirmLabel: "Delete Network",
+    danger: true,
+  });
+  if (!ok) return;
+  await withBusy(button, async () => {
+    try {
+      await api.del(`/networks/${network.id}`);
+      if (Number(localStorage.getItem(LAST_NETWORK_KEY)) === network.id) localStorage.removeItem(LAST_NETWORK_KEY);
+      toast(`${network.name} deleted.`, "success");
+      showNetworkPicker(await loadNetworkList());
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
 }
 
 function hideNetworkPicker() {
