@@ -19,7 +19,6 @@ from backend.schemas.change import AssessmentOut, ImpactOut
 from backend.services import (
     change_detector,
     cli_generator,
-    explanation_engine,
     impact_engine,
     recommendation_engine,
     risk_engine,
@@ -94,7 +93,7 @@ def run_pipeline(db: Session, change: Change, audit: bool = False) -> dict:
     decision["hybrid"] = risk_engine.hybrid(risk, ai)
     checks = validation_engine.build_checks(new, existing + revealed)
     summary = impact_engine.summarise(impacts, new, baseline)
-    explanation = explanation_engine.explain(detected, new, existing, resolved, impacts, risk, decision, checks,
+    explanation = recommendation_engine.explain(detected, new, existing, resolved, impacts, risk, decision, checks,
                                              revealed)
     if not validation_complete:
         explanation += "\n\nValidation is incomplete: configuration evidence is missing. No deployment or stored-model apply is approved by this assessment."

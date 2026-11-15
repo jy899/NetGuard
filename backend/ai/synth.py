@@ -40,7 +40,7 @@ def campus(seed: int) -> dict:
         port[a] += 1
         port[b] += 1
         for dev, iface, ip in ((a, ia, net[1]), (b, ib, net[2])):
-            configs[dev] += [f"interface {iface}", f" description core link", f" ip address {ip} 255.255.255.252"]
+            configs[dev] += [f"interface {iface}", " description core link", f" ip address {ip} 255.255.255.252"]
             if rng.random() < 0.3:
                 configs[dev] += [" ip ospf hello-interval 10"]  # written-out default
             ospf[dev].append(f" network {net.network_address} 0.0.0.3 area 0")

@@ -33,7 +33,10 @@ class DashboardSummary(BaseModel):
     devices: int
     interfaces: int
     links: int
+    total_changes: int = 0
     pending_changes: int = 0
+    approved_changes: int = 0  # approved but not applied yet
+    awaiting_approval: int = 0
     high_critical_changes: int = 0
     saved_assessments: int = 0
     risk_distribution: dict[str, int] = {}

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationFailed
-from backend.models import Device, Network, SavedLogin
+from backend.models import Device, Network
 from backend.models.credential_profile import CredentialAssignment, CredentialProfile
 
 

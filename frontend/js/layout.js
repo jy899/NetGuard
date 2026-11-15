@@ -4,7 +4,7 @@
 import { api, redirectToLogin, session } from "./api.js";
 import { logoSvg } from "./device-types.js";
 import { escapeHtml } from "./ui.js";
-import { initNavigationPanel, initWorkspacePanels } from "./workspace-panels.js";
+import { initNavigationPanel, initWorkspacePanels } from "./panels.js";
 
 export const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", href: "/dashboard", icon: "bi-speedometer2" },

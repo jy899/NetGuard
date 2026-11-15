@@ -18,7 +18,6 @@ import json
 import math
 from collections import Counter, defaultdict
 from functools import lru_cache
-from pathlib import Path
 
 from backend.ai import features as F
 from backend.ai.ml import GradientBoostedTrees, MultinomialNB, RobustBaseline
@@ -74,18 +73,52 @@ def available() -> bool:
     return "change_risk" in _models()
 
 
+LEARNING_DEFAULTS = {"auto": True, "after": 10}
+
+
+def learning_settings() -> dict:
+    from backend.core import access
+    stored = access.read_app_settings().get("ai_learning") or {}
+    return {**LEARNING_DEFAULTS, **{k: v for k, v in stored.items() if k in LEARNING_DEFAULTS}}
+
+
+def update_learning(values: dict) -> dict:
+    from backend.core import access
+    from backend.core.errors import ValidationFailed
+    current = learning_settings()
+    if "auto" in values:
+        current["auto"] = bool(values["auto"])
+    if "after" in values:
+        after = int(values["after"])
+        if not 1 <= after <= 500:
+            raise ValidationFailed("Choose between 1 and 500 applied fixes.")
+        current["after"] = after
+    access.write_app_settings(ai_learning=current)
+    return current
+
+
+def _executed_count(db) -> int:
+    from sqlalchemy import func, select
+    from backend.models import ChangeOutcome
+    return db.scalar(select(func.count(ChangeOutcome.id)).where(ChangeOutcome.actual_harmful.is_not(None))) or 0
+
+
 def status(db=None) -> dict:
+    from backend.ai import registry
     manifest = _manifest()
+    releases = registry.ensure_index(MODEL_DIR) if MODEL_DIR.exists() else []
+    current = next((row for row in releases if row["status"] == "active"), None)
     out = {"available": available(), "model_version": version(), "models": sorted(_models()),
            "trained_at": manifest.get("trained_at"), "metrics": manifest.get("metrics", {}),
            "evaluation": manifest.get("evaluation"), "dataset": manifest.get("dataset", {}),
-           "advisory": ADVISORY}
+           "advisory": ADVISORY, "release": current["release"] if current else None,
+           "releases": list(reversed(releases)), "learning": learning_settings(), "training": registry.busy()}
     if db is not None:
         from sqlalchemy import func, select
         from backend.models import ChangeOutcome
-        out["local_outcomes"] = {
-            "forecasts": db.scalar(select(func.count(ChangeOutcome.id))) or 0,
-            "executed": db.scalar(select(func.count(ChangeOutcome.id)).where(ChangeOutcome.actual_harmful.is_not(None))) or 0}
+        executed = _executed_count(db)
+        out["local_outcomes"] = {"forecasts": db.scalar(select(func.count(ChangeOutcome.id))) or 0, "executed": executed}
+        out["new_outcomes"] = max(0, executed - int((current or {}).get("local_outcomes") or 0))
     return out
 
 
@@ -473,6 +506,33 @@ def record_forecast(db, change, insight: dict) -> None:
         row.simulated_endpoints = insight.get("simulated_endpoints")
 
 
+def schedule_auto_retrain(delay: float = 3.0) -> None:
+    """After an applied fix is recorded, retrain in the background once enough new outcomes exist. The new release
+    is kept only if it scores at least as well as the active one (see backend.ai.registry)."""
+    import os
+    import threading
+    if os.getenv("NETGUARD_AI_AUTO", "1") == "0":
+        return
+    timer = threading.Timer(delay, _auto_retrain)
+    timer.daemon = True
+    timer.start()
+
+
+def _auto_retrain() -> None:
+    from backend.ai import registry
+    from backend.database.session import SessionLocal
+    settings = learning_settings()
+    if not settings["auto"] or registry.busy() or not (DATASET_DIR / "change_outcomes.jsonl").exists():
+        return
+    try:
+        with SessionLocal() as db:
+            current = registry.active(MODEL_DIR) or {}
+            if _executed_count(db) - int(current.get("local_outcomes") or 0) >= settings["after"]:
+                retrain(db, True, trigger="auto")
+    except Exception:  # noqa: BLE001 - background learning never disturbs the user
+        pass
+
+
 def record_execution(db, change, verification: dict, success: bool) -> None:
     from datetime import datetime, timezone
     from sqlalchemy import select
@@ -499,12 +559,28 @@ def local_training_rows(db) -> list[dict]:
     return rows
 
 
-def retrain(db, include_local: bool = True) -> dict:
-    """Retrain from the bundled datasets plus this installation's executed changes."""
-    from backend.ai import train
+def retrain(db, include_local: bool = True, trigger: str = "manual") -> dict:
+    """Train a new release from the bundled datasets plus this installation's applied fixes. It goes into use only
+    if it scores at least as well as the active release; either way it is kept in the version history."""
+    from backend.ai import registry, train
+    from backend.core.errors import ConflictError, ValidationFailed
     if not (DATASET_DIR / "change_outcomes.jsonl").exists():
-        from backend.core.errors import ValidationFailed
         raise ValidationFailed("The training datasets are not installed (data/datasets).")
-    manifest = train.train(DATASET_DIR, MODEL_DIR, local_training_rows(db) if include_local else [], log=lambda *_: None)
+    rows = local_training_rows(db) if include_local else []
+    try:
+        row = registry.train_release(MODEL_DIR, lambda folder: train.train(DATASET_DIR, folder, rows, log=lambda *_: None), trigger)
+    except RuntimeError as exc:
+        raise ConflictError(str(exc)) from exc
     reload()
-    return manifest
+    return row
+
+
+def restore(release: int) -> dict:
+    from backend.ai import registry
+    from backend.core.errors import NotFoundError
+    try:
+        row = registry.restore(MODEL_DIR, release)
+    except LookupError as exc:
+        raise NotFoundError(str(exc)) from exc
+    reload()
+    return row

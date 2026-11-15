@@ -152,6 +152,9 @@ def update_account(db, user, account_id, payload):
     if payload.is_active is not None and account.is_active != payload.is_active:
         account.is_active = payload.is_active
         account.token_version += 1
+    if payload.password:
+        account.password_hash = hash_password(payload.password)
+        account.token_version += 1  # signs the account out everywhere
     db.commit()
     db.refresh(account)
     return account

@@ -450,7 +450,6 @@ def _mikrotik(text: str, hostname: str | None) -> Dev:
                 if dst == "0.0.0.0/0":
                     dev.gw = attrs["gateway"]
         elif section == "/ip service" and s.startswith("set"):
-            service = attrs.get("[") or next((k for k in ("telnet", "www", "api", "ftp") if k in s.split()), None)
             enabled = attrs.get("disabled") != "yes"
             if "telnet" in s and enabled:
                 dev.facts["vty"].append({"kind": "vty", "lines": "ip service telnet", "transport": ["telnet"], "access_class": None})

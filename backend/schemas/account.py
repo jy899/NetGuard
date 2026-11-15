@@ -5,13 +5,14 @@ from backend.core.permissions import PERMISSIONS
 
 class AccountCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50, pattern=r'^[a-zA-Z0-9_.-]+$')
-    password: str = Field(min_length=8, max_length=128, repr=False)
+    password: str = Field(min_length=1, max_length=128, repr=False)
     group_id: int
 
 
 class AccountUpdate(BaseModel):
     group_id: int | None = None
     is_active: bool | None = None
+    password: str | None = Field(default=None, max_length=128, repr=False)  # administrator password reset
 
 
 class GroupIn(BaseModel):

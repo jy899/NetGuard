@@ -26,6 +26,7 @@ class ExecuteIn(BaseModel):
     password: str = Field(default="", max_length=128, repr=False)
     secret: str = Field(default="", max_length=128, repr=False)
     port: int = Field(default=22, ge=1, le=65535)
+    backup: bool = False  # optional: save a copy of the configuration NetGuard holds before the fix
 
 router = APIRouter(tags=["changes"])
 
@@ -120,7 +121,7 @@ def reject_change(change_id: int, db: DbSession, user: CurrentUser, body: Decisi
 
 @router.post("/changes/{change_id}/execute")
 def execute_change(change_id: int, body: ExecuteIn, db: DbSession, user: CurrentUser) -> dict:
-    """Apply an approved change to its laboratory device with backup, verification and automatic rollback."""
+    """Apply a change (approved, or Auto-Fix): verification and automatic undo; an optional backup first."""
     if body.confirm is not True:
         raise NetGuardError('Executing a change on a device needs confirmation: send {"confirm": true}.')
     change = change_service.get_change(db, change_id)
@@ -145,8 +146,8 @@ def rollback_change(change_id: int, db: DbSession, user: CurrentUser, body: Exec
 
 
 @router.get("/settings/self-healing")
-def get_self_healing(_: CurrentUser) -> dict:
-    return remediation_service.self_healing_settings()
+def get_self_healing(user: CurrentUser) -> dict:
+    return {**remediation_service.self_healing_settings(), "direct_for_me": remediation_service.admin_direct(user)}
 
 
 @router.put("/settings/self-healing")

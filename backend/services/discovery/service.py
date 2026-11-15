@@ -20,17 +20,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.core.errors import ValidationFailed
-from backend.models import Device, Link, Network, NetworkIntent
+from backend.models import Device, Network
 from backend.models.credential_profile import CredentialProfile
 from backend.services import credential_service
 from backend.services.demo_topology import _available_name
-from backend.services.discovery import classification, fusion
+from backend.services.discovery import classification, fusion, subnets
 from backend.services.discovery.engine import SECURE_METHODS, observation
 from backend.services.discovery.real_engine import RealDiscoveryEngine
 
 MAX_PREFIX = 22
 MAX_CRAWL_DEPTH = 3
-MAX_CRAWL_ADDRESSES = 256
+MAX_CRAWL_ADDRESSES = 1024
+MAX_EXTRA_RANGES = 7  # further ranges (VLANs) typed with the first one
 PRIVATE_NETS = [ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
 SESSION_DEFAULT = {"version": 1, "state": "prompting", "skipped": [], "skip_all": False,
                    "confirmation": "not_needed", "closed_reason": None}
@@ -75,7 +76,8 @@ def _now() -> str:
 
 def scan(db: Session, user, network_range: ipaddress.IPv4Network, name: str | None, authorized: bool,
          excluded: list[str] | None = None, untrusted: list[str] | None = None, auto_credentials: bool = False,
-         follow_neighbours: bool = False, max_depth: int = MAX_CRAWL_DEPTH, progress=None) -> Network:
+         follow_neighbours: bool = False, max_depth: int = MAX_CRAWL_DEPTH, progress=None,
+         extra_ranges: list[ipaddress.IPv4Network] | None = None) -> Network:
     if not authorized:
         raise ValidationFailed("Confirm that you are authorized to scan this address range before starting discovery.")
     if network_range.prefixlen < MAX_PREFIX:
@@ -90,15 +92,27 @@ def scan(db: Session, user, network_range: ipaddress.IPv4Network, name: str | No
         probe = engine.probe(progress=report)
     except TypeError:  # engines without progress reporting
         probe = engine.probe()
+    # Further ranges the engineer authorised (other VLANs): swept the same way, off-link (ICMP and TCP, no ARP).
+    extra_ranges = [n for n in (extra_ranges or []) if n != network_range]
+    for extra in extra_ranges:
+        more = engine_factory(extra, excluded).probe()
+        probe["observations"] = list(probe["observations"]) + list(more["observations"])
+        probe["no_response"] = list(probe["no_response"]) + list(more["no_response"])
+        probe["timeline"] = list(probe["timeline"]) + [
+            {**row, "id": f"{row['id']}-{extra}", "label": f"{row['label']} ({extra})"} for row in more["timeline"]]
+    ranges = [str(network_range)] + [str(n) for n in extra_ranges]
     meta = {
         "mode": "live", "live_device_contact": True, "target": str(network_range),
         "method": "smart", "discovery_schema_version": 3, "interface_naming_version": 1,
-        "scope": {"authorised": [str(network_range)], "excluded": excluded, "untrusted": untrusted,
+        "scope": {"authorised": ranges, "excluded": excluded, "untrusted": untrusted,
                   "follow_neighbours": bool(follow_neighbours)},
+        "swept": list(ranges),
         "authorization": {"confirmed": True, "by": user.username, "at": _now(), "range": str(network_range)},
         "observations": probe["observations"], "timeline": probe["timeline"], "no_response": probe["no_response"],
         "discovery": {}, "discovery_can_login": [], "discovery_session": dict(SESSION_DEFAULT),
-        "limitations": ["ICMP, DNS, the gateway hop and DHCP facts never establish a cable.",
+        "limitations": ["Hosts in another VLAN are found only when that subnet is scanned: add it to the range, or "
+                        "let NetGuard read the router or layer 3 switch and follow the subnets it reports.",
+                        "ICMP, DNS, the gateway hop and DHCP facts never establish a cable.",
                         "Switch neighbour and MAC tables require an authenticated read.",
                         "ARP (MAC) evidence is available only for addresses on this computer's own subnet."],
         "modeling_assumptions": [
@@ -108,7 +122,7 @@ def scan(db: Session, user, network_range: ipaddress.IPv4Network, name: str | No
     }
     network = Network(
         name=_available_name(db, name or f"Discovery · {network_range}"), network_type="Enterprise",
-        description=f"Network discovery of {network_range}.", created_by=user.id, environment="real",
+        description=f"Network discovery of {', '.join(ranges)}.", created_by=user.id, environment="real",
         source="discovery", is_simulated=False, metadata_json=meta)
     db.add(network)
     db.flush()
@@ -264,12 +278,33 @@ def crawl(db: Session, user, network: Network, engine=None, follow_neighbours: b
     for depth in range(1, max(0, min(max_depth, MAX_CRAWL_DEPTH)) + 1):
         candidates = neighbour_addresses(db, network, follow_neighbours)
         probe_list = list(dict.fromkeys(candidates["management"] + candidates["next-hop"] + candidates["arp"]))[:budget]
-        if not probe_list:
+        # Other VLANs: every subnet a read router or layer 3 switch is attached to, or routes to, is swept too.
+        meta = dict(network.metadata_json)
+        scope = meta.get("scope", {})
+        swept = list(meta.get("swept") or scope.get("authorised", []))
+        sweep, left_out = subnets.plan(subnets.candidates(meta.get("observations", [])), scope.get("authorised", []),
+                                       scope.get("excluded", []), swept, follow_neighbours)
+        known = {facts["ip"] for facts in meta.get("discovery", {}).values()}
+        sweep_list = [ip for row in sweep for ip in subnets.hosts(row["cidr"]) if ip not in known and ip not in probe_list]
+        if not probe_list and not sweep:
+            if left_out:
+                meta["subnets_not_scanned"] = left_out
+                network.metadata_json = meta
+                db.commit()
             break
         budget -= len(probe_list)
-        report("neighbours", depth, max_depth, len(probe_list))
-        result = engine.probe(probe_list)
+        report("subnets" if sweep else "neighbours", depth, max_depth, len(probe_list) + len(sweep_list))
+        result = engine.probe(probe_list + sweep_list)
         meta = dict(network.metadata_json)
+        meta["swept"] = swept + [row["cidr"] for row in sweep]
+        meta["subnets_not_scanned"] = left_out
+        if sweep:
+            meta["timeline"] = list(meta.get("timeline", [])) + [
+                {"id": f"subnet-{row['cidr']}", "label": f"Other subnet {row['cidr']}",
+                 "count": sum(1 for ip in subnets.hosts(row["cidr"]) if ip in {o["subject"] for o in result["observations"]}),
+                 "detail": f"Reported by {row.get('reported_by')}"
+                           + (f" on {row['interface']}" if row.get("interface") else " as a routed destination")
+                           + "; swept with ICMP and TCP (no ARP across a router)."} for row in sweep]
         observations = list(meta.get("observations", [])) + list(result["observations"])
         answered = {o["subject"] for o in result["observations"]}
         # A host listed in a read router's ARP table exists even when it answers no probe (host firewalls).
@@ -292,8 +327,11 @@ def crawl(db: Session, user, network: Network, engine=None, follow_neighbours: b
         meta["observations"] = observations
         meta["discovery"] = _add_devices(db, network, meta.get("discovery", {}), observations)
         added = len(meta["discovery"]) - before
-        meta.setdefault("crawl", []).append({"depth": depth, "probed": len(probe_list), "answered": len(answered),
-                                             "added": added, "sources": {k: len(v) for k, v in candidates.items()}})
+        meta.setdefault("crawl", []).append({"depth": depth, "probed": len(probe_list) + len(sweep_list),
+                                             "answered": len(answered), "added": added,
+                                             "subnets": [row["cidr"] for row in sweep],
+                                             "sources": {**{k: len(v) for k, v in candidates.items()},
+                                                         "subnet-sweep": len(sweep_list)}})
         network.metadata_json = meta
         db.flush()
         fusion.fuse(db, network)
@@ -496,6 +534,13 @@ def _read_device(db, user, engine, devices, meta, observations, did, method, use
                 text = o["facts"].pop("text")
                 config = device_state.store_config(db, devices[did], text, method, "collected", user)
                 o["facts"].update(config_id=config.id, sha256=config.sha256)
+                attached = subnets.from_config(text)
+                if attached:
+                    observations.append(observation("connected-subnets", facts["ip"], {"subnets": attached},
+                                                    f"{len(attached)} subnet(s) on the device's own interfaces: "
+                                                    + ", ".join(s["cidr"] for s in attached[:8]) + ".",
+                                                    authenticated=True, method=method, observed_by=facts["ip"],
+                                                    simulated=False))
                 routes = _static_routes(text)
                 if routes:
                     observations.append(observation("routing-table", facts["ip"], {"routes": routes},
@@ -564,6 +609,8 @@ def extend_result(db: Session, network: Network, result: dict) -> dict:
         "credential_requests": state["queue"], "available_authentications": state["available"],
         "confirmation_candidates": state["confirmation_candidates"], "session": state["session"],
         "timeline": (network.metadata_json or {}).get("timeline", []),
+        "subnets": {"scanned": (network.metadata_json or {}).get("swept", []),
+                    "not_scanned": (network.metadata_json or {}).get("subnets_not_scanned", [])},
         "report": {
             "counts": counts, "labels": classification.CATEGORY_LABELS,
             "connections": {"confirmed": sum(link["discovery_status"] == "observed" for link in links),

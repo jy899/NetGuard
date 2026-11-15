@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from backend.api.deps import CurrentUser, DbSession
+from backend.core.permissions import USERS, require
 from backend.services import ai_engine, health_service, network_service
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -14,6 +15,11 @@ class SyslogIn(BaseModel):
 
 class RetrainIn(BaseModel):
     include_local: bool = True
+
+
+class LearningIn(BaseModel):
+    auto: bool | None = None
+    after: int | None = None
 
 
 @router.get("/status")
@@ -40,9 +46,21 @@ def classify(body: SyslogIn, user: CurrentUser):
 
 @router.post("/retrain")
 def retrain(body: RetrainIn, db: DbSession, user: CurrentUser):
-    manifest = ai_engine.retrain(db, body.include_local)
-    return {"metrics": manifest["metrics"], "local_outcomes": manifest["local_outcomes"],
-            "trained_at": manifest["trained_at"], "status": ai_engine.status(db)}
+    require(user, USERS)
+    release = ai_engine.retrain(db, body.include_local)
+    return {"release": release, "local_outcomes": release["local_outcomes"], "status": ai_engine.status(db)}
+
+
+@router.post("/releases/{release}/restore")
+def restore(release: int, db: DbSession, user: CurrentUser):
+    require(user, USERS)
+    return {"release": ai_engine.restore(release), "status": ai_engine.status(db)}
+
+
+@router.put("/learning")
+def learning(body: LearningIn, user: CurrentUser):
+    require(user, USERS)
+    return ai_engine.update_learning(body.model_dump(exclude_none=True))
 
 
 def _store(db, network_id: int, report: dict) -> dict:

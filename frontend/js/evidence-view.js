@@ -8,7 +8,7 @@ export function environmentLabel(network = {}) {
     return `Virtual lab · ${network.source === "eve-ng" ? "EVE-NG" : "GNS3"}${network.is_simulated ? " (sample data from an earlier version)" : ""}`;
   }
   if (network.source === "config-import") return "Configuration import · stored model";
-  if (network.is_simulated || network.source === "demo" || network.source === "sample") return "Offline example network";
+  if (network.is_simulated || network.source === "demo" || network.source === "sample") return "Practice network";
   if (network.environment === "virtual") return "Virtual lab";
   return "Manual model";
 }

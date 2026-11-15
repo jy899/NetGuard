@@ -12,7 +12,7 @@ a copy of each model, a "digital twin" labelling:
 * link_faults.jsonl     - cross-device link misconfigurations with benign variation (tokens + label).
 * syslog.jsonl          - Cisco IOS syslog messages by fault category.
 
-build() writes a manifest with counts, seeds and the generator version.
+Run: python -m backend.ai.train (writes a manifest with counts, seeds and the generator version).
 """
 from __future__ import annotations
 

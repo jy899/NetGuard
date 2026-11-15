@@ -4,6 +4,7 @@
     NetGuard.exe --enable-web-access   allow a local browser at http://127.0.0.1:8001 (asks for an administrator)
     NetGuard.exe --disable-web-access  turn browser access off again
     NetGuard.exe --server              run the local service without a window (browser access must be enabled)
+    NetGuard.exe --reset-admin         set the admin account back to admin / admin (Reset_Admin_Password.cmd)
 
 From source, use "python netguard.py" with the same options. The service only listens on 127.0.0.1.
 """
@@ -109,8 +110,13 @@ def run_desktop(port: int) -> int:
             parts = urlsplit(str(target))
             if parts.scheme not in ("http", "https") or not parts.hostname:
                 return False
-            webview.create_window(str(title)[:80] or "Device web management", target, width=1280, height=860)
-            return True
+            try:
+                webview.create_window(str(title)[:80] or "Device web management", target, width=1280, height=860)
+                return True
+            except Exception:  # noqa: BLE001 - no second window on this GUI backend: use the default browser
+                import webbrowser
+
+                return bool(webbrowser.open(target))
 
         def open_external(self, target: str) -> bool:
             import webbrowser
@@ -150,18 +156,45 @@ def run_server(port: int) -> int:
     return 0
 
 
+def reset_admin() -> int:
+    """Forgotten password: put the built-in admin account back to admin / admin, re-enable it and sign it out
+    everywhere. No other account is changed."""
+    from sqlalchemy import select
+
+    from backend.core.security import hash_password
+    from backend.database.init_db import init_db
+    from backend.database.session import SessionLocal
+    from backend.models import User
+
+    init_db()  # creates the database and the admin account if they do not exist yet
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.username == "admin"))
+        if user is None:
+            print("There is no account named admin; nothing was changed.")
+            return 1
+        user.password_hash = hash_password("admin")
+        user.is_active = True
+        user.token_version = (user.token_version or 0) + 1  # old sessions stop working
+        db.commit()
+    print("The admin account is now admin / admin.")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="NetGuard", description="NetGuard desktop application")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--enable-web-access", action="store_true", help="allow a local browser to use NetGuard")
     group.add_argument("--disable-web-access", action="store_true", help="allow only the desktop window")
     group.add_argument("--server", action="store_true", help="run the local service without a window")
+    group.add_argument("--reset-admin", action="store_true", help="set the admin account back to admin / admin")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--user", help="administrator username (web access commands)")
     parser.add_argument("--password", help="administrator password (prompted when omitted)")
     args = parser.parse_args(argv)
     if args.enable_web_access or args.disable_web_access:
         return set_web_access(args.enable_web_access, args.user, args.password)
+    if args.reset_admin:
+        return reset_admin()
     if args.server:
         return run_server(args.port)
     return run_desktop(args.port)

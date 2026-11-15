@@ -25,7 +25,7 @@ class AiInsight(Base):
 class ChangeOutcome(Base):
     """One analysed change: the model's forecast and, once executed on a laboratory device, what happened.
 
-    Executed outcomes become local training rows (scripts/train_models.py --include-local)."""
+    Executed outcomes become local training rows (python -m backend.ai.train --include-local)."""
     __tablename__ = "change_outcomes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

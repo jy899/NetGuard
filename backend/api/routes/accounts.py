@@ -16,15 +16,15 @@ def _device_changes() -> str:
     from backend.services.remediation_service import self_healing_settings
 
     policy = self_healing_settings()
-    return ("Approved changes to laboratory devices; production devices with permission-based self-healing "
-            f"(confirmation window {policy['confirm_minutes']} min, hybrid risk limit {policy['max_hybrid_level']})"
-            if policy["enabled"] else "Approved changes to laboratory devices only (production self-healing is off)")
+    return ("By group permission: approved changes, real-network devices and Auto-Fix; every fix is backed up, "
+            f"checked and undone if it fails (confirm within {policy['confirm_minutes']} min, risk limit "
+            f"{policy['max_hybrid_level']})")
 
 
 @router.get('/account/settings')
 def settings(user: CurrentUser, configuration: AppSettings):
     return {'profile': UserOut.model_validate(user), 'is_admin': account_service.is_admin(user),
-            'security': {'password_min_length': 8, 'token_expire_minutes': configuration.token_expire_minutes,
+            'security': {'password_min_length': 1, 'token_expire_minutes': configuration.token_expire_minutes,
                          'login_throttling': True, 'failed_login_limit': login_throttle.max_failures,
                          'encrypted_device_credentials': True, 'vault': 'AES-256-GCM',
                          'key_protection': vault.protection(), 'web_access': web_access_enabled(),

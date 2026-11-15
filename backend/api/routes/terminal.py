@@ -155,14 +155,19 @@ async def terminal_socket(websocket: WebSocket):
 def _discovery_facts(db, device: Device) -> tuple[dict, list[dict]]:
     network = db.get(Network, device.network_id)
     meta = (network.metadata_json or {}) if network else {}
-    ip = device.management_ip
+    # A device can answer on several addresses (management, SVIs): portals found on any of them belong to it.
+    addresses = {device.management_ip, (meta.get("discovery", {}).get(str(device.id)) or {}).get("ip")}
+    addresses |= {i.ip_address for i in device.interfaces if i.ip_address} if hasattr(device, "interfaces") else set()
+    addresses.discard(None)
     sites = []
     for o in meta.get("observations", []):
-        if o.get("subject") == ip and o.get("technique") == "web-portal":
-            sites = list(o["facts"].get("portals", []))
+        if o.get("subject") in addresses and o.get("technique") == "web-portal":
+            sites += [s for s in o["facts"].get("portals", []) if s["url"] not in {x["url"] for x in sites}]
     scanned = (meta.get("portal_scans") or {}).get(str(device.id), {})
     known = {s["url"] for s in sites}
     sites += [s for s in scanned.get("portals", []) if s["url"] not in known]
+    known = {s["url"] for s in sites}
+    sites += [{**s, "custom": True} for s in scanned.get("custom", []) if s["url"] not in known]
     return scanned, sites
 
 
@@ -176,6 +181,39 @@ def device_portals(device_id: int, db: DbSession, _: CurrentUser):
             "suggested": [] if sites or not device.management_ip else [
                 {"url": f"https://{device.management_ip}/", "verified": False},
                 {"url": f"http://{device.management_ip}/", "verified": False}]}
+
+
+class PortalOpenIn(BaseModel):
+    address: str   # 192.168.1.1, 192.168.1.1:8443, host:port/path or a full http(s) URL
+
+
+@router.post("/devices/{device_id}/portals/open")
+def open_portal(device_id: int, payload: PortalOpenIn, db: DbSession, user: CurrentUser):
+    """Work out the URL for an address the operator typed (HTTP or HTTPS, any port) and remember it for the device."""
+    device = _device(db, device_id)
+    try:
+        site = portals.resolve(payload.address)
+    except ValueError as exc:
+        raise ValidationFailed(str(exc)) from None
+    network = db.get(Network, device.network_id)
+    if network is not None:
+        meta = dict(network.metadata_json or {})
+        scans = dict(meta.get("portal_scans") or {})
+        entry = dict(scans.get(str(device.id)) or {})
+        entry["custom"] = ([s for s in entry.get("custom", []) if s.get("url") != site["url"]] + [site])[-8:]
+        scans[str(device.id)] = entry
+        meta["portal_scans"] = scans
+        network.metadata_json = meta
+        db.commit()
+    return site
+
+
+@router.get("/devices/{device_id}/port-clients")
+def port_clients(device_id: int, db: DbSession, _: CurrentUser):
+    """Which MAC address, IP address and device is on each port of a switch that has been read."""
+    from backend.services.discovery import port_clients as clients
+
+    return clients.table(db, _device(db, device_id))
 
 
 class PortScanIn(BaseModel):

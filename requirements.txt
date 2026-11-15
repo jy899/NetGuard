@@ -1,4 +1,7 @@
-# Top-level versions verified with Python 3.12 on Windows 11 and Python 3.13 on Linux. Python >=3.11.
+# NetGuard packages. Start_NetGuard.cmd installs these automatically. Python 3.11 or later.
+# Versions verified with Python 3.12 on Windows 11 and Python 3.13 on Linux.
+
+# Application
 fastapi==0.143.3
 uvicorn[standard]==0.54.0
 SQLAlchemy==2.1.5
@@ -10,3 +13,9 @@ netaddr==1.3.0
 reportlab==5.1.0
 pywebview==6.2.1
 psutil==7.1.3
+
+# Tests (backend/tests) and the Windows app build (Build_NetGuard_App.cmd)
+pytest==9.1.1
+httpx==0.28.1
+playwright==1.64.0
+pyinstaller==6.22.3

@@ -84,6 +84,14 @@ function identity(d) {
     <div class="text-muted-ng small">${escapeHtml([d.vendor, d.model].filter(Boolean).join(" · ") || (unknown ? "Identity not determined from the evidence" : ""))}</div>`;
 }
 
+function subnetSummary(subnets) {
+  const scanned = subnets?.scanned || [], skipped = subnets?.not_scanned || [];
+  if (!scanned.length && !skipped.length) return "";
+  const why = skipped.map((row) => `${row.cidr}: ${row.reason}`).join("\n");
+  return `<span title="${escapeHtml(scanned.join("\n"))}" data-subnets-scanned><i class="bi bi-diagram-2 me-1"></i><strong>${scanned.length}</strong> subnets scanned</span>`
+    + (skipped.length ? `<span class="text-warning-emphasis" title="${escapeHtml(why)}" data-subnets-skipped><i class="bi bi-exclamation-triangle me-1"></i>${skipped.length} not scanned (hover for why)</span>` : "");
+}
+
 function render() {
   const r = state.result;
   if (!r) return;
@@ -100,7 +108,7 @@ function render() {
     `<span><strong>${devices.length - identified}</strong> unidentified</span>`, `<span><strong>${read}</strong> read with credentials</span>`,
     `<span class="badge text-bg-success">${grades.Confirmed ?? 0} confirmed</span>`, `<span class="badge ng-badge-inferred">${grades.Inferred ?? 0} inferred</span>`,
     `<span class="badge text-bg-info">${grades.Logical ?? 0} logical</span>`, `<span class="badge text-bg-light border">${unknownLinks} without connection evidence</span>`,
-  ].join("");
+  ].join("") + subnetSummary(r.subnets);
   $("scan-table").innerHTML = devices.length ? `<div class="table-responsive"><table class="table ng-table small align-middle mb-0" data-scan="devices">
     <thead><tr><th>IP address</th><th>Name</th><th>MAC / vendor</th><th>Identified as</th><th>Services</th><th>Access</th><th></th></tr></thead><tbody>
     ${devices.map((d) => `<tr data-scan-row="${d.id}"><td class="mono">${escapeHtml(d.ip || "")}${d.gateway ? ' <span class="badge text-bg-light border">gateway</span>' : ""}</td>

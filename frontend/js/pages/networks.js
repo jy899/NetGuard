@@ -57,6 +57,7 @@ async function loadNetworks() {
   $("network-count").textContent = state.networks.length;
   renderList();
   renderVirtualProjects();
+  renderPractice();
 }
 
 function renderVirtualProjects() {
@@ -73,7 +74,7 @@ function selectVirtualProject() {
   $("virtual-open").disabled = !network;
   $("virtual-new-options").classList.toggle("d-none", !!network);
   if (network) $("provider-box").classList.add("d-none");
-  $("virtual-project-summary").textContent = network ? `${network.device_count} devices · ${network.link_count} links · ${network.metadata_json?.server ? `from ${network.metadata_json.server}` : "saved model"}. Opening preserves your topology, analysis and reviewed corrections.` : "Select a saved laboratory workspace or import a lab from an EVE-NG or GNS3 server below.";
+  $("virtual-project-summary").textContent = network ? `${network.device_count} devices · ${network.link_count} links · ${network.metadata_json?.server ? `from ${network.metadata_json.server}` : "saved model"}.` : "Open a saved lab or import one below.";
 }
 
 function existingProviderProject(labId) {
@@ -398,13 +399,60 @@ function setupWorkflows() {
       } catch (error) { showFormError($("provider-form"), error.message); }
     });
   });
-  $("btn-example").addEventListener("click", (event) => withBusy(event.currentTarget, async () => {
-    try {
-      const result = await api.post("/networks/samples", { scenario: $("example-scenario").value });
-      window.location.href = `/topology?network=${result.network_id}`;
-    } catch (error) { toast(error.message, "error"); }
-  }));
   setupScanner({ showDevice, onComplete: () => loadNetworks() });
+}
+
+// Ready-made networks with a known fault (offline; nothing is contacted).
+const PRACTICE = [
+  ["healthy", "bi-check2-circle", "Healthy network", "No faults. A clean baseline to explore."],
+  ["vlan", "bi-diagram-2", "VLAN fault", "A PC is in the wrong VLAN for its subnet."],
+  ["routing", "bi-signpost-split", "Routing fault", "Two routers use different OSPF areas."],
+  ["interface", "bi-plug", "Interface down", "A router port on a core link is shut down."],
+  ["acl", "bi-bricks", "Firewall / ACL fault", "An ACL blocks traffic the business needs."],
+  ["loop", "bi-arrow-repeat", "Switching loop", "Three switches form a loop with no blocking port."],
+  ["missing-link", "bi-x-octagon", "Missing cable", "An expected connection is not there."],
+  ["ip-conflict", "bi-files", "IP address conflict", "Two devices use the same address."],
+  ["mixed", "bi-collection", "Several faults", "VLAN, routing and ACL faults together."],
+];
+
+const practiceName = (title) => `Practice — ${title}`;
+
+/** Practice cards: Open reuses the existing copy (with your fixes); New copy starts the fault again. */
+function renderPractice() {
+  const grid = document.getElementById("practice-grid");
+  if (!grid) return;
+  const existing = (title) => state.networks.find((n) => n.is_simulated && n.name === practiceName(title));
+  const made = PRACTICE.filter(([, , title]) => existing(title)).length;
+  $("practice-count").textContent = made ? `${made} of ${PRACTICE.length} opened` : `${PRACTICE.length} exercises`;
+  grid.innerHTML = PRACTICE.map(([id, icon, title, text]) => {
+    const copy = existing(title);
+    return `<div class="col-sm-6 col-xl-4"><div class="ng-card ng-practice h-100">
+      <div class="ng-practice-icon"><i class="bi ${icon}"></i></div>
+      <div class="flex-grow-1 min-w-0"><div class="fw-semibold">${title}</div><div class="small text-muted-ng">${text}</div>
+        ${copy ? `<button class="btn btn-link btn-sm p-0 mt-1" data-practice="${id}" data-title="${title}" data-fresh="1">Start again</button>` : ""}</div>
+      ${copy ? `<a class="btn btn-sm btn-primary" href="/topology?network=${copy.id}">Continue</a>`
+        : `<button class="btn btn-sm btn-outline-primary" data-practice="${id}" data-title="${title}">Open</button>`}</div></div>`;
+  }).join("");
+}
+
+function setupPractice() {
+  document.getElementById("practice-grid")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-practice]");
+    if (!button) return;
+    const name = practiceName(button.dataset.title);
+    const old = state.networks.filter((n) => n.is_simulated && n.name === name);
+    withBusy(button, async () => {
+      try {
+        if (button.dataset.fresh) {
+          const ok = await confirmDialog({ title: "Start this exercise again?", message: "The practice network is reset to its original fault. Your fixes in it are discarded.", confirmLabel: "Start Again" });
+          if (!ok) return;
+          for (const n of old) await api.del(`/networks/${n.id}`);
+        }
+        const result = await api.post("/networks/samples", { scenario: button.dataset.practice, name });
+        window.location.href = `/topology?network=${result.network_id}`;
+      } catch (error) { toast(error.message, "error"); }
+    });
+  });
 }
 
 async function main() {
@@ -414,6 +462,7 @@ async function main() {
   document.getElementById("btn-new-network").addEventListener("click", () => openModal());
   setupImport();
   setupWorkflows();
+  setupPractice();
   try {
     await loadNetworks();
   } catch (error) {

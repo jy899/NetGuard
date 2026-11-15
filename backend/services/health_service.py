@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core.errors import NetGuardError
@@ -107,6 +108,28 @@ def _legacy_sample_notes(network) -> list[str]:
             "create a new sample network to use the updated topology."]
 
 
+OPEN_CHANGE_STATES = ("pending_approval", "approved", "awaiting_confirm")
+
+
+def _link_open_changes(db: Session, network_id: int, rows: list[dict]) -> None:
+    """Attach the submitted change behind each proposed fix, so an issue shows "waiting for approval" or "approved:
+    apply it" instead of offering the same fix again. Approval alone never changes a device."""
+    from backend.models import Change
+
+    open_changes = db.scalars(select(Change).where(Change.network_id == network_id,
+                                                   Change.status.in_(OPEN_CHANGE_STATES))
+                              .order_by(Change.id.desc())).all()
+    if not open_changes:
+        return
+    for row in rows:
+        for fix in row.get("fixes", []):
+            for change in open_changes:
+                if (change.device_id, change.interface_id, change.change_type, change.parameters or {}) == \
+                        (fix.get("device_id"), fix.get("interface_id"), fix.get("change_type"), fix.get("parameters") or {}):
+                    fix["change"] = {"id": change.id, "status": change.status}
+                    break
+
+
 def run_health_check(db: Session, network_id: int, verify_fixes: bool = True) -> dict:
     started = time.perf_counter()
     network = network_service.get_network(db, network_id)
@@ -177,6 +200,7 @@ def run_health_check(db: Session, network_id: int, verify_fixes: bool = True) ->
                           "parameters": option.parameters, "verification": verification})
         advisory["fixes"] = fixes
 
+    _link_open_changes(db, network.id, issues + advisory_rows)
     configuration_incomplete = bool((network.metadata_json or {}).get("configuration_incomplete"))
     flow_rows = []
     for flow in flows:
@@ -274,6 +298,6 @@ def run_health_check(db: Session, network_id: int, verify_fixes: bool = True) ->
         "elapsed_ms": int((time.perf_counter() - started) * 1000),
         "simulated": network.is_simulated, "environment": network.environment,
         "modeling_assumptions": (network.metadata_json or {}).get("modeling_assumptions", []),
-        "evidence_scope": "Stored configuration and collected observations; analysis runs on a copy of the model.",
+        "evidence_scope": "Checked on a copy of the stored configs and scan results.",
         "ai": ai,
     }

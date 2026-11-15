@@ -32,7 +32,7 @@ where and why does it stop?" using deterministic prototype semantics:
 * The return path is checked for routing (not ACL), so a broken reverse
   route or host gateway is also detected.
 
-Known simplifications: flat OSPF areas and a stateless ACL check.
+Known simplifications: flat OSPF (no area design rules) and stateless ACL checks.
 """
 from __future__ import annotations
 
@@ -708,7 +708,6 @@ class FlowAnalyzer:
     # ------------------------------------------------------------------
     def evaluate(self, src_id: int, dst_id: int, protocol: str = "ip", port: int | None = None) -> FlowResult:
         model = self.model
-        src, dst = model.device(src_id), model.device(dst_id)
         a_src, a_dst = self.attachment(src_id), self.attachment(dst_id)
         for att, side in ((a_src, "source"), (a_dst, "destination")):
             if not att.l2_ok:
@@ -1004,6 +1003,3 @@ def model_link(model: NetworkModel, a: int, b: int) -> int | None:
     found = model.link_between(a, b)
     return found[0].id if found else None
 
-
-def endpoint_ids(model: NetworkModel) -> list[int]:
-    return [d.id for d in model.devices.values() if d.type in ("pc", "server")]

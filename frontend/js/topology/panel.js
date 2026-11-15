@@ -21,7 +21,7 @@ export function renderNoNetwork() {
   return `
     <div class="ng-panel-section">
       <div class="ng-panel-title">Network</div>
-      <p class="text-muted-ng mb-0">No network is open. Create or select a network to start building its topology.</p>
+      <p class="text-muted-ng mb-0">No network is open. Choose one from the list.</p>
     </div>`;
 }
 
@@ -90,7 +90,7 @@ export function renderOverview(analysis, health = null) {
       </div>
       <dl class="ng-kv mt-3 mb-0"><dt>Environment</dt><dd>${escapeHtml(network.environment || 'manual')}</dd>
         <dt>Source</dt><dd>${escapeHtml(network.source || 'manual')}</dd>
-        <dt>Data</dt><dd>${network.is_simulated ? 'Offline example' : 'Collected or imported configuration'}</dd></dl>
+        <dt>Data</dt><dd>${network.is_simulated ? 'Practice network (model only)' : 'Collected or imported configuration'}</dd></dl>
     </div>`;
 }
 
@@ -227,6 +227,7 @@ export function renderDevice(device, analysis) {
       <div class="ng-panel-actions">
         ${device.management_ip || device.access?.console ? `<button class="btn btn-sm btn-dark" data-action="open-cli" data-device-id="${device.id}" title="Interactive terminal (double-click the device)"><i class="bi bi-terminal me-1"></i>Open CLI</button>
         <button class="btn btn-sm btn-outline-dark" data-action="open-gui" data-device-id="${device.id}" title="Detected web management portals"><i class="bi bi-window me-1"></i>Web GUI</button>` : ''}
+        ${['switch', 'router', 'firewall'].includes(device.device_type) ? `<button class="btn btn-sm btn-outline-dark" data-action="port-clients" data-device-id="${device.id}" title="What is connected to each port"><i class="bi bi-hdd-network me-1"></i>Ports</button>` : ''}
         ${smart && ['required', 'failed'].includes(discovery.classification?.auth) ? `<button class="btn btn-sm btn-primary full" data-action="discovery-auth" data-device-id="${device.id}"><i class="bi bi-shield-lock me-1"></i>Authenticate this device</button>` : ''}
         <button class="btn btn-sm btn-primary full" data-action="propose-change" ${device.device_type === 'unknown' ? 'disabled title="Identify the device and collect configuration first"' : ''}><i class="bi bi-lightning-charge me-1"></i>Propose Change</button>
         <button class="btn btn-sm btn-outline-primary" data-action="edit-device"><i class="bi bi-pencil me-1"></i>Edit Device</button>
@@ -243,6 +244,11 @@ export function renderDevice(device, analysis) {
     </div>
     ${isL3 ? routingSection(device) : ""}
     ${isSwitch ? vlanSection(device) : ""}
+    ${["router", "switch", "firewall"].includes(device.device_type) ? `<div class="ng-panel-section" data-backups="${device.id}">
+      <div class="ng-panel-title">Configuration Backups</div>
+      <div class="d-flex gap-2 mb-2"><button class="btn btn-sm btn-light border" data-action="download-config" data-device-id="${device.id}"><i class="bi bi-download me-1"></i>Current config</button>
+        <button class="btn btn-sm btn-light border" data-action="backup-now" data-device-id="${device.id}"><i class="bi bi-archive me-1"></i>Back up now</button></div>
+      <div class="small text-muted-ng" data-backup-list>Loading…</div></div>` : ""}
     <div class="ng-panel-section">
       <div class="ng-panel-title">Connections <span>${links.length}</span></div>
       ${connections}

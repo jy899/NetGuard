@@ -180,7 +180,7 @@ async def _walk(engine, auth, target, context, base) -> dict:
 
 async def _collect(ip, port, user, timeout, only_system, community=None):
     from pysnmp.hlapi.v3arch.asyncio import (CommunityData, ContextData, ObjectIdentity, ObjectType, SnmpEngine,
-                                             UdpTransportTarget, get_cmd, walk_cmd)
+                                             UdpTransportTarget, get_cmd)
 
     engine = SnmpEngine()
     target = await UdpTransportTarget.create((ip, port), timeout=timeout, retries=1)

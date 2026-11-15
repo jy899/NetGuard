@@ -2,9 +2,13 @@
 
 Evaluation holds out whole topologies (grouped by `source`), so the reported metrics describe networks the models
 have never seen. Local outcomes recorded by this installation (executed laboratory changes) are added to the
-change-risk training set when "include executed changes" is chosen.
+change-risk training set when --include-local is given.
 
-Run from Settings → AI Models → Retrain.
+Rebuild from scratch (NetGuard also retrains itself from Settings > NetGuard AI):
+    python -m backend.ai.train                    regenerate the synthetic datasets, then train
+    python -m backend.ai.train --models-only      train from the existing datasets
+    python -m backend.ai.train --include-local    also learn from the fixes recorded in the NetGuard database
+Options: --campuses 90 --changes 45 --seed 2026 (dataset size and random seed).
 """
 from __future__ import annotations
 
@@ -181,3 +185,32 @@ def _top1(rows, model) -> float | None:
         total += 1
     return round(hits / total, 3) if total else None
 
+
+def main(argv=None) -> None:
+    import argparse
+
+    root = Path(__file__).resolve().parents[2]
+    parser = argparse.ArgumentParser(description="Rebuild NetGuard AI datasets and models")
+    parser.add_argument("--models-only", action="store_true", help="skip dataset generation")
+    parser.add_argument("--include-local", action="store_true", help="add fixes recorded in the NetGuard database")
+    parser.add_argument("--campuses", type=int, default=90)
+    parser.add_argument("--changes", type=int, default=45)
+    parser.add_argument("--seed", type=int, default=2026)
+    args = parser.parse_args(argv)
+    if not args.models_only:
+        manifest = D.build(root / "data" / "datasets", args.campuses, args.changes, args.seed)
+        print(f"Datasets: {manifest['counts']} ({manifest['built_seconds']} s)")
+    local = []
+    if args.include_local:
+        from backend.database.init_db import init_db
+        from backend.database.session import SessionLocal
+        from backend.services import ai_engine
+        init_db()
+        with SessionLocal() as db:
+            local = ai_engine.local_training_rows(db)
+    manifest = train(root / "data" / "datasets", root / "data" / "models", local)
+    print(f"Models trained in {manifest['trained_seconds']} s; {manifest['local_outcomes']} local outcome(s).")
+
+
+if __name__ == "__main__":
+    main()

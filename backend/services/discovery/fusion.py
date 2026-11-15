@@ -35,6 +35,7 @@ _TECHNIQUE_LABELS = {
     "address-table": "IPv4 address table", "arp-table": "ARP table", "syslog": "Syslog messages",
     "upnp": "UPnP (SSDP)", "web-portal": "Web management portal", "local-host": "This computer",
     "wifi-association": "Wi-Fi association", "stp-topology": "Spanning tree (BRIDGE-MIB)",
+    "connected-subnets": "Subnets on the device's interfaces",
 }
 
 
@@ -88,6 +89,55 @@ def fuse(db: Session, network: Network) -> None:
     for o in obs:
         if o["authenticated"]:
             reads[o["observed_by"]][o["technique"]] = o
+    # A router's ARP table gives the MAC of hosts in other VLANs, which this computer's own ARP cache never holds.
+    for o in obs:
+        if o["authenticated"] and o["technique"] == "arp-table":
+            for row in o["facts"].get("entries", []):
+                if row.get("mac") and row.get("ip") in ip_dev:
+                    mac_ip.setdefault(row["mac"].lower(), row["ip"])
+    # Every MAC address a read device owns (port MACs, bridge MAC): a neighbour's MAC table usually shows one of
+    # these, not the management address that answered ARP.
+    own_macs = defaultdict(set)
+    for ip, techniques in reads.items():
+        for row in techniques.get("interface-status", {}).get("facts", {}).get("ports", []):
+            if row.get("mac"):
+                own_macs[ip].add(str(row["mac"]).lower())
+        bridge = techniques.get("stp-topology", {}).get("facts", {}).get("bridge_mac")
+        if bridge:
+            own_macs[ip].add(str(bridge).lower())
+    for mac, ip in mac_ip.items():
+        own_macs[ip].add(mac)
+    mac_owner: dict[str, str | None] = {}
+    for ip, macs in own_macs.items():
+        for mac in macs:
+            if ip in ip_dev and mac.strip("0:.-"):
+                mac_owner[mac] = None if mac in mac_owner and mac_owner[mac] != ip else ip  # shared MAC: no owner
+
+    def host_of(mac: str):
+        mac = (mac or "").lower()
+        return ip_dev.get(mac_ip.get(mac) or mac_owner.get(mac) or "")
+
+    def learned_port(reader, target) -> str | None:
+        """The single port on which `reader` (read with a MAC table) learned a MAC address owned by `target`."""
+        table = reads.get(facts_of(reader)["ip"], {}).get("mac-table")
+        if table is None:
+            return None
+        wanted = own_macs.get(facts_of(target)["ip"], set())
+        ports = {row["port"] for row in table["facts"]["rows"] if str(row["mac"]).lower() in wanted}
+        return next(iter(ports)) if len(ports) == 1 else None
+
+    def nearest(sw, infra: dict):
+        """Of the network devices whose MACs are learned on one port of `sw`, the one cabled to that port: the only
+        one, or the one that sees `sw` on one port and every other candidate on different ports."""
+        if len(infra) == 1:
+            return next(iter(infra.values()))
+        direct = []
+        for entry, cand in infra.values():
+            back = learned_port(cand, sw)
+            others = [learned_port(cand, other) for _, other in infra.values() if other.id != cand.id]
+            if back and all(p and p != back for p in others):
+                direct.append((entry, cand))
+        return direct[0] if len(direct) == 1 else None
     leases = {lease["ip"]: lease for o in obs if o["technique"] == "dhcp-leases" for lease in o["facts"]["leases"]}
     lldp_rows = [(o["observed_by"], row, o) for o in obs if o["technique"] == "lldp-table" for row in o["facts"]["rows"]]
     gateway_ips = {o["subject"] for o in obs if o["technique"] == "traceroute"} | {lease["router"] for lease in leases.values()}
@@ -381,22 +431,29 @@ def fuse(db: Session, network: Network) -> None:
                 continue
             if (ip, port) in lldp_ports:
                 continue
-            located = [(entry, ip_dev.get(mac_ip.get(entry["mac"].lower(), ""))) for entry in entries]
+            located = [(entry, host_of(entry["mac"])) for entry in entries]
             located = [(entry, host) for entry, host in located if host is not None and host.id != sw.id]
             infra_here = {host.id: (entry, host) for entry, host in located if is_infrastructure(host, facts_of(host))}
             hosts_here = [(entry, host) for entry, host in located if not is_infrastructure(host, facts_of(host))]
             wireless = bool(WIRELESS_PORT.search(port))
-            if len(infra_here) == 1 and len(entries) > 1:
-                # The port leads to one discovered network device without LLDP/CDP: an uplink (inferred from the
-                # MAC table); the endpoints learned on it are behind that device.
-                entry, nb = next(iter(infra_here.values()))
+            direct = nearest(sw, infra_here) if infra_here else None
+            if direct is not None:
+                # The port leads to a discovered network device without LLDP/CDP: a link inferred from the MAC
+                # table. With several network devices behind the port, the one cabled to it is the one that sees
+                # this switch on one port and the others elsewhere; endpoints learned here are behind that device.
+                entry, nb = direct
                 if frozenset({sw.id, nb.id}) not in {frozenset({l.source_device_id, l.destination_device_id}) for l in links}:
                     ia = iface(sw, port)
-                    links.append(_link(network.id, sw, ia, nb, None, "mac", "Inferred", 0.7, [
+                    far = learned_port(nb, sw)
+                    ib = iface(nb, far) if far else None
+                    others = len(entries) - 1
+                    links.append(_link(network.id, sw, ia, nb, ib, "mac", "Inferred", 0.75 if far else 0.7 if others else 0.6, [
                         f"Authenticated {SECURE_METHODS.get(table['method'], table['method'])} read of {sw.name}: "
-                        f"the MAC {entry['mac']} of network device {nb.name} is learned on port {port}, together with "
-                        f"{len(entries) - 1} other address(es): {port} is an uplink towards {nb.name}."],
-                        ["LLDP/CDP on the link, or a MAC table read from " + nb.name], ia.speed_mbps))
+                        f"the MAC {entry['mac']} of network device {nb.name} is learned on port {port}"
+                        + (f", together with {others} other address(es): {port} is an uplink towards {nb.name}."
+                           if others else f", the only address there: {nb.name} is cabled to {port}.")]
+                        + ([f"{nb.name} learned a MAC address of {sw.name} on its port {far}."] if far else []),
+                        ["LLDP/CDP on the link"] + ([] if far else ["A MAC table read from " + nb.name]), ia.speed_mbps))
                     linked |= {sw.id, nb.id}
                 for _, host in hosts_here:
                     behind[host.id] = (nb, f"{sw.name} learned its MAC on {port}, the uplink towards {nb.name}")

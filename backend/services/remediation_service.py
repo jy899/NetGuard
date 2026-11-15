@@ -41,7 +41,9 @@ from backend.services.network_model import load_model
 
 RISK_ORDER = {"DEPLOY": 0, "DEPLOY_WITH_CAUTION": 1, "DO_NOT_DEPLOY": 2}
 LEVELS = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
-SELF_HEALING_DEFAULTS = {"enabled": False, "confirm_minutes": 5, "device_timer": True, "max_hybrid_level": "HIGH",
+# Who may fix what is decided by group permissions (change.execute, change.execute_production, change.auto_fix);
+# these settings only tune the safeguards.
+SELF_HEALING_DEFAULTS = {"confirm_minutes": 5, "device_timer": True, "max_hybrid_level": "HIGH",
                          "reachability_check": True}
 _pending: dict[int, dict] = {}   # execution id -> in-memory session state (target, backup, timer) until confirmed
 _pending_lock = __import__("threading").Lock()
@@ -61,8 +63,6 @@ def update_self_healing(user, values: dict) -> dict:
     if not has(user, USERS):
         raise ForbiddenError("Only an administrator can change the self-healing policy.")
     current = self_healing_settings()
-    if "enabled" in values:
-        current["enabled"] = bool(values["enabled"])
     if "confirm_minutes" in values:
         minutes = int(values["confirm_minutes"])
         if not 2 <= minutes <= 60:
@@ -80,21 +80,29 @@ def update_self_healing(user, values: dict) -> dict:
     return current
 
 
+def admin_direct(user) -> bool:
+    """Auto-Fix: the account's group has change.auto_fix (administrators always do). It removes the wait for a
+    second person (approval and separation of duties); backup, verification, the risk limit, the revert timer, the
+    confirmation window and automatic rollback all still apply, and "Do not deploy" is never overridden."""
+    from backend.core.permissions import AUTO_FIX
+
+    return has(user, AUTO_FIX)
+
+
 def _authorize_production(db, user, change, device, check) -> None:
     from backend.collectors import drivers
 
     settings = self_healing_settings()
-    if not settings["enabled"]:
-        raise ValidationFailed(f"{device.name} is a production device and permission-based self-healing is switched off. "
-                               "An administrator can enable it in Settings; until then apply the approved commands "
-                               "manually and record the change as deployed.")
-    if not has(user, PRODUCTION):
-        raise ForbiddenError("Your user group may not execute changes on production devices "
-                             "(permission: change.execute_production).")
-    if change.decided_by is not None and change.decided_by == user.id:
-        raise ForbiddenError("Separation of duties: the account that approved this change cannot also execute it.")
-    if change.submitted_by is not None and change.decided_by == change.submitted_by:
-        raise ForbiddenError("Separation of duties: the change was approved by its own submitter.")
+    direct = admin_direct(user)
+    if not has(user, PRODUCTION) and not direct:
+        raise ForbiddenError(f"{device.name} is a real-network device. Your user group needs the permission "
+                             "\"Apply approved changes to real-network devices\" (Settings > Groups), or apply the "
+                             "commands manually and record the change as deployed.")
+    if not direct:
+        if change.decided_by is not None and change.decided_by == user.id:
+            raise ForbiddenError("Separation of duties: the account that approved this change cannot also execute it.")
+        if change.submitted_by is not None and change.decided_by == change.submitted_by:
+            raise ForbiddenError("Separation of duties: the change was approved by its own submitter.")
     platform = device.platform if device.platform in drivers.DRIVERS else drivers.detect(device.vendor, device.model)
     driver = drivers.get(platform)
     if not driver.configurable or not driver.netmiko_ssh:
@@ -212,27 +220,55 @@ def _clean(commands: list[str]) -> list[str]:
     return [c for c in commands if c.strip() and not c.lstrip().startswith(("!", "#")) and c.strip() not in wrappers]
 
 
+def device_config_text(db: Session, device: Device, model=None) -> tuple[str, str]:
+    """The configuration NetGuard holds for a device: the latest stored one, or one written from the model."""
+    stored = device_state.latest_config(db, device.id, ("collected", "post-change", "startup"))
+    if stored is not None and (stored.text or "").strip():
+        return stored.text, "stored"
+    from backend.services import config_render
+
+    model = model or load_model(db, device.network_id)
+    dev = model.devices.get(device.id)
+    return (config_render.render(dev) if dev else f"hostname {device.name}\n"), "model"
+
+
+def backup_device(db: Session, user, device: Device, model=None, source: str = "netguard"):
+    """Optional backup before a fix: a copy of the configuration NetGuard holds, downloadable later."""
+    text, origin = device_config_text(db, device, model)
+    row = device_state.store_config(db, device, text, f"{source}-{origin}", "backup", user)
+    return row, origin
+
+
 def execute(db: Session, user, change, data: dict) -> ChangeExecution:
-    if not has(user, EXECUTE):
-        raise ForbiddenError("Only an Administrator or Network Engineer can execute an approved change.")
-    if change.status != "approved":
+    direct = admin_direct(user)
+    if not has(user, EXECUTE) and not direct:
+        raise ForbiddenError("Your user group may not apply changes (permission: change.execute).")
+    if change.status != "approved" and not direct:
         raise ConflictError("Only an approved change can be executed. Submit it for IT Manager approval first.")
     device = db.get(Device, change.device_id) if change.device_id else None
     if device is None:
         raise ValidationFailed("The target device no longer exists.")
-    if not device.is_lab and not self_healing_settings()["enabled"]:
-        raise ValidationFailed(f"{device.name} is a production device and permission-based self-healing is switched off. "
-                               "An administrator can enable it in Settings; until then apply the approved commands "
-                               "manually and record the change as deployed.")
     network = db.get(Network, change.network_id)
     pre = load_model(db, change.network_id)
     detected = change_detector.detect(pre, change.device_id, change.interface_id, change.change_type, change.parameters)
+    simulated = bool(network and network.is_simulated)
     allowed, why = cli_generator.automatable(pre.device(change.device_id), change.change_type, change.parameters)
-    if not allowed:
+    if not allowed and not simulated:
         raise ValidationFailed(f"This change cannot be applied automatically: {why}.")
-    commands = _clean(cli_generator.commands_for(pre, detected))
-    if not commands:
+    try:
+        commands = _clean(cli_generator.commands_for(pre, detected))
+    except Exception:  # noqa: BLE001 - a practice network is changed in the model even without a template
+        if not simulated:
+            raise
+        commands = []
+    if not commands and not simulated:
         raise ValidationFailed("NetGuard has no command template for this change on this platform; apply it manually.")
+    if change.status != "approved":
+        # Auto-Fix: approved only once the change is known to be executable, so a refused fix
+        # leaves no approval behind.
+        from backend.services import approval_service
+
+        approval_service.admin_approve(db, change, user)
     # 1. re-validation on a fresh model copy
     check = analysis_service.run_pipeline(db, change)
     approved = next((a for a in change.assessments if a.id == change.approved_assessment_id), None)
@@ -243,6 +279,9 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
         db.commit()
         raise ConflictError(f"The network changed since approval: the change is now rated {check['decision']['label']}. "
                             "Validate and submit it again.")
+    want_backup = bool(data.get("backup"))
+    if simulated:
+        return _execute_simulated(db, user, change, device, network, pre, detected, commands, want_backup, check)
     production = not device.is_lab
     if production:
         _authorize_production(db, user, change, device, check)
@@ -263,22 +302,31 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
     def note(text):
         log.append({"at": _now().isoformat(timespec="seconds"), "step": text})
 
-    # 2. backup
+    # 2. optional backup of the configuration NetGuard holds (the user's choice)
+    user_backup = None
+    if want_backup:
+        user_backup, origin = backup_device(db, user, device, pre)
+        note(f"Backup saved: the configuration NetGuard holds for {device.name}"
+             f"{' (written from the model)' if origin == 'model' else ''}. Download it any time.")
+    # 3. connect and keep a restore point, so the automatic undo can put the device back
     try:
         backup_text = cli.running_config(target)
     except cli.CliError as exc:
-        note(f"Backup failed: {exc}. Nothing was changed.")
+        note(f"Could not connect to {device.name}: {exc}. Nothing was changed.")
         execution.log, execution.finished_at = log, _now()
+        execution.verification = {"backup": _backup_ref(user_backup)} if user_backup else {}
         db.commit()
-        raise ValidationFailed(f"Could not read the configuration backup from {device.name}: {exc}") from None
+        where = f"{target.host}:{target.port}" if getattr(target, "host", None) else device.name
+        raise ValidationFailed(f"NetGuard could not connect to {device.name} ({where}): {exc}. Nothing was changed. "
+                               "Check the address, the login and that SSH or the console is enabled.") from None
     if not backup_text.strip():
         note("The device returned an empty configuration. Nothing was changed.")
         execution.log, execution.finished_at = log, _now()
         db.commit()
         raise ValidationFailed(f"{device.name} returned an empty configuration; nothing was changed.")
-    backup = device_state.store_config(db, device, backup_text, execution.transport, "backup", user)
+    backup = device_state.store_config(db, device, backup_text, execution.transport, "pre-change", user)
     execution.backup_config_id = backup.id
-    note(f"Backup of the running configuration stored (SHA-256 {backup.sha256[:16]}…).")
+    note(f"Connected; restore point taken for the automatic undo (SHA-256 {backup.sha256[:16]}…).")
     settings = self_healing_settings()
     baseline, armed = {}, None
     if production:
@@ -312,6 +360,8 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
         note(f"Applying the change failed: {exc}")
     # 4. verify
     verification = {"intended_state": False, "new_findings": [], "broken_flows": [], "error": error}
+    if user_backup is not None:
+        verification["backup"] = _backup_ref(user_backup)
     post_text = None
     try:
         post_text = cli.running_config(target)
@@ -326,9 +376,10 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
         post = load_model(db, change.network_id)
         actual = _state(post, change.device_id, change.interface_id, change.change_type)
         post_findings, post_working, names = _assess(post)
+        new, revealed = _split_revealed(sorted(f"{rule}|{subject}" for rule, subject in post_findings - pre_findings), check)
         verification.update(
-            intended_state=actual == expected,
-            new_findings=sorted(f"{rule}|{subject}" for rule, subject in post_findings - pre_findings),
+            intended_state=actual == expected, revealed=revealed,
+            new_findings=new,
             broken_flows=sorted(names.get(k, k) for k in pre_working - post_working),
             post_sha256=post_cfg.sha256)
         note("Post-change configuration collected and analysed: intended state "
@@ -398,6 +449,7 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
     try:
         from backend.services import ai_engine
         ai_engine.record_execution(db, change, verification, success)  # a real outcome for retraining
+        ai_engine.schedule_auto_retrain()
     except Exception:  # noqa: BLE001
         pass
     meta = dict(network.metadata_json or {})
@@ -411,6 +463,91 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
                            {"change_id": change.id, "status": execution.status, "transport": execution.transport},
                            {"commands": commands, "rollback_commands": execution.rollback_commands,
                             "verification": verification, "log": log, "backup_sha256": backup.sha256})
+    db.refresh(execution)
+    return execution
+
+
+def _backup_ref(row) -> dict:
+    return {"id": row.id, "sha256": row.sha256, "at": _now().isoformat(timespec="seconds")}
+
+
+def _split_revealed(new_keys: list[str], check: dict) -> tuple[list[str], list[str]]:
+    """Problems that were hidden behind the fixed fault (predicted by the analysis as "revealed") are not caused by
+    the change: report them, but do not undo the fix for them."""
+    revealed = {r.get("key") for r in (check or {}).get("revealed", [])}
+    return [k for k in new_keys if k not in revealed], [k for k in new_keys if k in revealed]
+
+
+def _execute_simulated(db: Session, user, change, device, network, pre, detected, commands, want_backup,
+                       check) -> ChangeExecution:
+    """Practice (offline) network: no device exists, so the fix is applied to NetGuard's own model of it, checked
+    the same way (intended state, no new finding, no newly broken flow) and undone if the check fails."""
+    from backend.services import apply_service
+
+    execution = ChangeExecution(change_id=change.id, device_id=device.id, device_name=device.name, transport="simulated",
+                                status="failed", commands=commands, rollback_commands=[], verification={}, log=[],
+                                executed_by=user.id)
+    db.add(execution)
+    log = []
+
+    def note(text):
+        log.append({"at": _now().isoformat(timespec="seconds"), "step": text})
+
+    verification = {"intended_state": False, "new_findings": [], "broken_flows": [], "error": None, "simulated": True}
+    if want_backup:
+        row, origin = backup_device(db, user, device, pre)
+        verification["backup"] = _backup_ref(row)
+        note(f"Backup saved: the configuration of {device.name} before the fix. Download it any time.")
+    expected = _state(change_detector.apply(pre, detected), change.device_id, change.interface_id, change.change_type)
+    pre_findings, pre_working, _ = _assess(pre)
+    db.flush()
+    savepoint = db.begin_nested()
+    try:
+        apply_service._mutate(db, change)
+        db.flush()
+        db.expire_all()
+        post = load_model(db, change.network_id)
+        actual = _state(post, change.device_id, change.interface_id, change.change_type)
+        post_findings, post_working, names = _assess(post)
+        new, revealed = _split_revealed(sorted(f"{rule}|{subject}" for rule, subject in post_findings - pre_findings), check)
+        verification.update(intended_state=actual == expected, new_findings=new, revealed=revealed,
+                            broken_flows=sorted(names.get(k, k) for k in pre_working - post_working))
+        note(f"Practice network: the fix was applied to NetGuard's model of {device.name}"
+             + (f" ({len(commands)} command(s) shown for reference)." if commands else "."))
+        note("Checked: intended state " + ("present" if verification["intended_state"] else "NOT present")
+             + f", {len(verification['new_findings'])} new problem(s), {len(verification['broken_flows'])} newly broken flow(s).")
+        if revealed:
+            note(f"{len(revealed)} problem(s) that the fixed fault was hiding are now visible: {', '.join(k.split('|')[0] for k in revealed)}. "
+                 "Run Analyze again to fix them.")
+    except Exception as exc:  # noqa: BLE001
+        verification["error"] = str(exc)
+        note(f"Applying the fix to the model failed: {exc}")
+    success = verification["intended_state"] and not verification["new_findings"] and not verification["broken_flows"] \
+        and not verification["error"]
+    if success:
+        savepoint.commit()
+        note("The fix is kept.")
+    else:
+        savepoint.rollback()
+        note("The check failed, so the fix was undone; the network is as it was before.")
+    db.expire_all()
+    execution = db.get(ChangeExecution, execution.id)
+    change = db.get(type(change), change.id)
+    execution.status = "applied" if success else "rolled_back"
+    change.status = "applied" if success else "rolled_back"
+    verification["restored"] = not success
+    execution.verification, execution.log, execution.finished_at = verification, log, _now()
+    network = db.get(Network, change.network_id)
+    meta = dict(network.metadata_json or {})
+    meta["last_remediation"] = {"change_id": change.id, "status": execution.status, "at": _now().isoformat(timespec="seconds")}
+    network.metadata_json = meta
+    from backend.services import network_service
+    network_service.touch(network)
+    db.commit()
+    history_service.record(db, user, change.network_id, "remediation",
+                           f"Practice fix {execution.status.replace('_', ' ')}: {device.name}",
+                           {"change_id": change.id, "status": execution.status, "transport": "simulated"},
+                           {"commands": commands, "verification": verification, "log": log})
     db.refresh(execution)
     return execution
 

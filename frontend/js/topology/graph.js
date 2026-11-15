@@ -54,6 +54,7 @@ const STYLE = [
       width: 2,
       "line-color": "#8492a6",
       "curve-style": "bezier",
+      "control-point-step-size": 70, // parallel cables bow apart so their port labels do not overlap
       "source-label": "data(sourceLabel)",
       "target-label": "data(targetLabel)",
       "source-text-offset": "data(labelOffset)",

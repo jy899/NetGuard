@@ -2,6 +2,14 @@
 import { flowLabel, riskBadge, riskClass, severityBadge } from "./risk.js";
 import { escapeHtml, formatDate } from "./ui.js";
 import { advisoriesBlock, diagnosticSections, environmentLabel, expectedActionBadge, flowResultBadge, scopeText } from "./evidence-view.js";
+import { canAutoFix } from "./topology/workflow.js";
+
+let viewer = null;  // signed-in user of the current render (decides whether Fix Now is offered)
+const CHANGE_STATE = {
+  pending_approval: { icon: "bi-hourglass-split", text: "Submitted. Waiting for approval.", button: "Open" },
+  approved: { icon: "bi-patch-check", text: "Approved. Not applied yet.", button: "Apply Now" },
+  awaiting_confirm: { icon: "bi-stopwatch", text: "Applied. Confirm it to keep it.", button: "Open" },
+};
 
 const VERDICTS = {
   recommended: { level: "LOW", text: "Recommended" },
@@ -44,21 +52,35 @@ function fixHtml(issueIndex, fix, fixIndex, kind = "issue") {
     ${v.work_order ? '<div class="small mt-1"><i class="bi bi-tools me-1"></i>Physical work order: a person carries it out; NetGuard verified its effect on the model.</div>' : ""}
     ${fix.ai ? `<div class="small mt-1 ng-ai-note" data-fix-ai="${fix.ai.band}"><i class="bi bi-stars me-1"></i>AI repair likelihood ${Math.round(fix.ai.repair_probability * 100)}% · ${escapeHtml(fix.ai.reason)}</div>` : ""}
     <details class="mt-1"><summary class="small">${v.work_order ? "Work order and commands" : "Suggested commands"}</summary>${commandsBlock(v.commands, `fix-${kind}-${issueIndex}-${fixIndex}`)}</details>
-    <div class="d-flex gap-2 mt-2">
-      <button class="btn btn-sm ${primary ? "btn-success" : "btn-outline-success"}" data-action="apply-fix" data-kind="${kind}"
-        data-issue-index="${issueIndex}" data-fix-index="${fixIndex}" ${v.verdict === "unsafe" ? "disabled" : ""}>
-        <i class="bi bi-send-check me-1"></i>Submit for Approval</button>
-      <button class="btn btn-sm btn-outline-primary" data-action="review-fix" data-kind="${kind}" data-issue-index="${issueIndex}" data-fix-index="${fixIndex}">
-        <i class="bi bi-search me-1"></i>Validate Correction</button>
-    </div>
+    ${fixActions(issueIndex, fix, fixIndex, kind, primary, v.verdict === "unsafe")}
   </div>`;
 }
 
-/** Issues whose first fix option is verified as safe and resolving. */
+/** The buttons under a fix: its submitted change if there is one, otherwise Fix Now (Auto-Fix) and Submit. */
+function fixActions(issueIndex, fix, fixIndex, kind, primary, unsafe) {
+  const at = `data-kind="${kind}" data-issue-index="${issueIndex}" data-fix-index="${fixIndex}"`;
+  const open = CHANGE_STATE[fix.change?.status];
+  if (open) {
+    return `<div class="d-flex align-items-center gap-2 mt-2" data-fix-change="${fix.change.status}">
+      <span class="small ${fix.change.status === "approved" ? "text-success fw-semibold" : "text-muted-ng"}"><i class="bi ${open.icon} me-1"></i>${open.text}</span>
+      <button class="btn btn-sm ${fix.change.status === "approved" ? "btn-success" : "btn-outline-primary"} ms-auto" data-action="open-change" data-change-id="${fix.change.id}">${open.button}</button></div>`;
+  }
+  const direct = canAutoFix(viewer);
+  return `<div class="d-flex gap-2 mt-2 flex-wrap">
+      ${direct ? `<button class="btn btn-sm ${primary ? "btn-success" : "btn-outline-success"}" data-action="auto-fix" ${at} ${unsafe ? "disabled" : ""}
+        title="Backup, apply, check, automatic undo"><i class="bi bi-lightning-charge-fill me-1"></i>Fix Now</button>` : ""}
+      <button class="btn btn-sm ${primary && !direct ? "btn-success" : "btn-outline-success"}" data-action="apply-fix" ${at} ${unsafe ? "disabled" : ""}>
+        <i class="bi bi-send-check me-1"></i>Submit for Approval</button>
+      <button class="btn btn-sm btn-outline-primary" data-action="review-fix" ${at}>
+        <i class="bi bi-search me-1"></i>Check First</button>
+    </div>`;
+}
+
+/** Issues whose first fix option is verified as safe and resolving and not already submitted. */
 export function fixableIssues(report, skipped) {
   return report.issues
     .map((issue, index) => ({ issue, index }))
-    .filter(({ issue }) => !skipped.has(issue.key) && issue.fixes[0]?.verification.verdict === "recommended");
+    .filter(({ issue }) => !skipped.has(issue.key) && issue.fixes[0]?.verification.verdict === "recommended" && !issue.fixes[0]?.change);
 }
 
 export const PACK_LABELS = { physical: "Physical", layer2: "Layer 2", layer3: "Layer 3", acl: "ACL and policy", security: "Security hygiene" };
@@ -79,7 +101,8 @@ export function aiInsightsBlock(ai) {
     <div class="small text-muted-ng mt-1">${escapeHtml(ai.advisory || "")}</div></div>`;
 }
 
-export function renderHealthPanel(report, skipped = new Set(), network = {}) {
+export function renderHealthPanel(report, skipped = new Set(), network = {}, user = null) {
+  viewer = user;
   const healthy = report.status === "healthy";
   const incomplete = report.status === 'incomplete' || report.analysis_complete === false;
   const fixable = fixableIssues(report, skipped);
@@ -139,9 +162,10 @@ export function renderHealthPanel(report, skipped = new Set(), network = {}) {
       <div class="small text-muted-ng mt-2">${report.rules_checked} rules · ${report.devices_checked} devices · ${report.links_checked} links ·
         ${report.elapsed_ms} ms · ${formatDate(report.checked_at)}</div>
       <div class="small mt-2" data-health="summary">Connectivity ${escapeHtml(String(report.status || "").toUpperCase())} · ${(report.advisories || []).length} security advisories</div>
-      <div class="small text-muted-ng mt-1" data-health="evidence-scope">${escapeHtml(scopeText(report.evidence_scope || environmentLabel(network)))}. Analysis uses stored model evidence.</div>
+      <div class="small text-muted-ng mt-1" data-health="evidence-scope">${escapeHtml(scopeText(report.evidence_scope || environmentLabel(network)))}</div>
       <div class="d-flex gap-2 mt-2 flex-wrap">
-        ${fixable.length ? `<button class="btn btn-sm btn-success" data-action="fix-all"><i class="bi bi-send-check me-1"></i>Submit All Fixes (${fixable.length})</button>` : ""}
+        ${fixable.length && network?.is_simulated && canAutoFix(user) ? `<button class="btn btn-sm btn-success" data-action="fix-all-now"><i class="bi bi-lightning-charge-fill me-1"></i>Fix All Now (${fixable.length})</button>` : ""}
+        ${fixable.length ? `<button class="btn btn-sm ${network?.is_simulated && canAutoFix(user) ? "btn-outline-success" : "btn-success"}" data-action="fix-all"><i class="bi bi-send-check me-1"></i>Submit All for Approval (${fixable.length})</button>` : ""}
         <button class="btn btn-sm btn-outline-primary" data-action="rerun-health"><i class="bi bi-arrow-repeat me-1"></i>Run again</button>
         <button class="btn btn-sm btn-outline-primary" data-action="save-network-report">Save Report</button>
         ${report.record_id ? `<a class="btn btn-sm btn-light border" href="/reports?record=${report.record_id}">View Saved Analysis</a>` : ''}
@@ -155,5 +179,5 @@ export function renderHealthPanel(report, skipped = new Set(), network = {}) {
     ${(report.coverage_notes || []).length ? `<div class="ng-panel-section"><div class="ng-panel-title">Analysis coverage notes</div><ul class="small ps-3 mb-0">${report.coverage_notes.map(note => `<li>${escapeHtml(typeof note === "object" ? note.detail || note.message : note)}</li>`).join("")}</ul></div>` : ""}
     ${(report.coverage_gaps || []).length ? `<div class="ng-panel-section" data-health="coverage"><div class="ng-panel-title">Coverage gaps</div>${report.coverage_gaps.map((gap) => `<div class="border rounded p-2 mb-2 small"><strong>${escapeHtml(gap.detail)}</strong><div class="text-muted-ng mt-1">${escapeHtml(gap.next_step)}</div>${gap.link_id ? `<button class="btn btn-sm btn-outline-primary mt-2" data-action="select-link" data-link-id="${gap.link_id}">Inspect connection</button>` : gap.code === 'configuration' && report.environment === 'real' ? '<button class="btn btn-sm btn-outline-primary mt-2" data-action="device-access">Device Access</button>' : ''}</div>`).join('')}</div>` : ''}
     <div class="ng-panel-section"><div class="ng-panel-title">${flowTitle} <span>${report.flows.length ? `${report.flows.filter((f) => f.ok).length}/${report.flows.length} passed` : 'Not configured'}</span></div>${flowNote}${flows}</div>
-    <div class="ng-panel-section"><p class="small text-muted-ng mb-0">Issues are ordered by risk score. A fix is validated on a copy of the model and needs IT Manager approval; only approved changes to laboratory devices are sent, with backup, verification and rollback. Confidence describes the collected evidence, not a measured probability of correctness.</p></div>`;
+    <div class="ng-panel-section"><p class="small text-muted-ng mb-0">Highest risk first. Every fix is checked on a copy of the network first, applied after approval (or at once with Fix Now) and undone automatically if the check after it fails.</p></div>`;
 }

@@ -74,8 +74,34 @@ def decide(db: Session, change: Change, user, approve: bool, note: str | None) -
     return change
 
 
-def withdraw_if_changed(change: Change) -> None:
-    """Called when a change is edited or re-analysed: an approval only covers the assessment it was given for."""
-    if change.status in ("pending_approval", "approved", "rejected"):
-        change.status = "analyzed"
-        change.approved_assessment_id = None
+def admin_approve(db: Session, change: Change, user, note: str | None = None) -> Change:
+    """Auto-Fix: an account whose group has change.auto_fix approves a validated change directly. The same evidence
+    rules as a submission apply; the decision is recorded under that account."""
+    from backend.core.permissions import AUTO_FIX, has
+
+    if not has(user, AUTO_FIX):
+        raise ForbiddenError("Your user group does not have the Auto-Fix permission.")
+    if change.status in ("applied", "rolled_back", "failed", "awaiting_confirm"):
+        raise ConflictError("This change has already been executed; propose a new change.")
+    assessment = latest_assessment(db, change)
+    if assessment is None:
+        raise ValidationFailed("Validate the change before fixing it.")
+    if assessment.validation_result == "INCOMPLETE":
+        raise ValidationFailed("The assessment is incomplete (configuration evidence is missing); collect the "
+                               "configuration and validate again.")
+    if assessment.recommendation == "DO_NOT_DEPLOY":
+        raise ValidationFailed("NetGuard rates this change Do not deploy; Auto-Fix does not override it.")
+    now = _now()
+    if change.submitted_by is None:
+        change.submitted_by, change.submitted_at = user.id, now
+    change.status = "approved"
+    change.decided_by, change.decided_at = user.id, now
+    change.decision_note = ("Auto-Fix" + (f": {note.strip()}" if (note or "").strip() else ""))[:300]
+    change.approved_assessment_id = assessment.id
+    db.commit()
+    history_service.record(db, user, change.network_id, "approval",
+                           f"Auto-Fix by {user.username}: {change.device_name}",
+                           {"change_id": change.id, "risk_level": assessment.risk_level, "status": "approved"},
+                           {"assessment_id": assessment.id, "mode": "admin_direct"})
+    return change
+

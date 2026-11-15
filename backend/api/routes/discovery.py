@@ -11,7 +11,7 @@ router = APIRouter(prefix="/discovery", tags=["discovery"])
 
 
 class ScanIn(BaseModel):
-    target: str = Field(default="", max_length=43)  # empty: this computer's own subnet
+    target: str = Field(default="", max_length=400)  # empty: this computer's own subnet; several ranges: comma separated
     name: str | None = Field(default=None, max_length=100)
     authorized_scope: bool = False
     excluded: list[str] = Field(default_factory=list, max_length=64)

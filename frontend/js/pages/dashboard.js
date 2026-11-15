@@ -35,11 +35,11 @@ function renderStats(summary) {
       note: "Latest network analysis results",
     }),
     statCard({
-      label: "Change Assessments",
-      value: summary.saved_assessments,
+      label: "Changes",
+      value: summary.total_changes ?? 0,
       icon: "bi-shield-check",
       tone: "neutral",
-      note: `${summary.high_critical_changes} high / critical · ${summary.pending_changes} pending`,
+      note: `${summary.awaiting_approval} awaiting approval · ${summary.approved_changes} to apply · ${summary.high_critical_changes} high risk`,
     }),
   ].join("");
 }
@@ -76,8 +76,8 @@ function renderRecent(networks) {
       <div class="ng-empty">
         <i class="bi bi-hdd-network"></i>
         <h4>No networks yet</h4>
-        <p>Create your first network to start modelling its topology.</p>
-        <a class="btn btn-primary btn-sm" href="/networks?create=1"><i class="bi bi-plus-lg me-1"></i>Create Network</a>
+        <p>Scan a network or import a lab to draw its map.</p>
+        <a class="btn btn-primary btn-sm" href="/networks"><i class="bi bi-plus-lg me-1"></i>Add Network</a>
       </div>`;
     return;
   }
@@ -121,27 +121,6 @@ function renderInventory(byType, total) {
     .join("");
 }
 
-function renderAssessments(items) {
-  const el = document.getElementById("recent-assessments");
-  if (!items.length) {
-    el.innerHTML = `<div class="ng-empty py-4"><i class="bi bi-shield-check"></i><h4>No assessments yet</h4>
-      <p>Select a device in the Topology Workspace and choose <strong>Propose Change</strong>.</p></div>`;
-    return;
-  }
-  el.innerHTML = `<div class="table-responsive"><table class="table ng-table">
-    <thead><tr><th>Change</th><th>Network</th><th>Score</th><th>Risk</th><th>Recommendation</th><th>Analysed</th><th></th></tr></thead>
-    <tbody>${items
-      .map((a) => `<tr>
-        <td><div class="fw-semibold">${escapeHtml(a.device_name)}</div><div class="small text-muted-ng mono">${escapeHtml(a.change_label)}</div></td>
-        <td>${escapeHtml(a.network_name)}</td>
-        <td class="fw-semibold">${a.total_risk_score}</td>
-        <td>${riskBadge(a.risk_level)}</td>
-        <td>${recommendationBadge(a.recommendation, a.risk_level)}</td>
-        <td class="small text-muted-ng">${formatDate(a.created_at)}${a.saved ? ' <i class="bi bi-check-circle-fill text-success" title="Saved"></i>' : ""}</td>
-        <td class="actions"><a class="btn btn-sm btn-outline-primary" href="/topology?network=${a.network_id}&change=${a.change_id}">Open</a></td>
-      </tr>`)
-      .join("")}</tbody></table></div>`;
-}
 
 function renderDistribution(dist) {
   const total = Object.values(dist).reduce((a, b) => a + b, 0);
@@ -155,15 +134,44 @@ function renderDistribution(dist) {
     : `<p class="small text-muted-ng mb-0">No changes analysed yet.</p>`;
 }
 
+/** First-run steps; the card disappears once all three are done. */
+async function renderGetStarted(summary) {
+  let logins = null;
+  try { logins = (await api.get("/credential-profiles")).length; } catch { /* not allowed for this group */ }
+  const steps = [
+    { done: summary.networks > 0, title: "Add a network", text: "Scan a range or import a GNS3, EVE-NG or Packet Tracer lab.", href: "/networks", action: "Add Network" },
+    { done: logins === null || logins > 0, title: "Save a device login", text: "Read-only SSH or SNMPv3, so NetGuard can read configs and ports.", href: "/settings#credentials", action: "Add Login" },
+    { done: summary.analysis_runs > 0, title: "Find problems", text: "Open the map and press Analyze.", href: "/topology", action: "Open Map" },
+  ];
+  const el = document.getElementById("get-started");
+  if (steps.every((s) => s.done)) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="ng-card mb-3" data-get-started><div class="ng-card-header"><h3>Get started</h3><span class="small text-muted-ng">${steps.filter((s) => s.done).length} of 3 done</span></div>
+    <div class="ng-card-body"><ol class="list-unstyled mb-0 d-grid gap-2">${steps.map((s, i) => `<li class="d-flex align-items-center gap-3">
+      <span class="badge rounded-pill ${s.done ? "text-bg-success" : "text-bg-light border"}">${s.done ? '<i class="bi bi-check-lg"></i>' : i + 1}</span>
+      <div class="flex-grow-1"><div class="fw-semibold ${s.done ? "text-decoration-line-through text-muted-ng" : ""}">${s.title}</div><div class="small text-muted-ng">${s.text}</div></div>
+      ${s.done ? "" : `<a class="btn btn-sm btn-outline-primary" href="${s.href}">${s.action}</a>`}</li>`).join("")}</ol></div></div>`;
+}
+
+function renderChangeNotice(summary) {
+  const el = document.getElementById("change-notice");
+  const parts = [];
+  if (summary.approved_changes) parts.push(`<a class="alert alert-success d-flex align-items-center gap-2 mb-2 text-decoration-none" href="/changes?status=approved" data-approved-notice>
+    <i class="bi bi-patch-check"></i><span><strong>${summary.approved_changes} approved fix${summary.approved_changes === 1 ? "" : "es"}</strong> not applied yet.</span><span class="ms-auto small fw-semibold">Apply now <i class="bi bi-arrow-right"></i></span></a>`);
+  if (summary.awaiting_approval) parts.push(`<a class="alert alert-light border d-flex align-items-center gap-2 mb-2 text-decoration-none" href="/changes?status=pending_approval">
+    <i class="bi bi-hourglass-split"></i><span><strong>${summary.awaiting_approval}</strong> waiting for approval.</span><span class="ms-auto small fw-semibold">Review <i class="bi bi-arrow-right"></i></span></a>`);
+  el.innerHTML = parts.length ? `<div class="mb-3">${parts.join("")}</div>` : "";
+}
+
 async function main() {
   await initShell({ active: "dashboard", title: "Dashboard", subtitle: "NetGuard overview" });
   try {
     const summary = await api.get("/dashboard/summary");
+    renderGetStarted(summary);
+    renderChangeNotice(summary);
     renderStats(summary);
     renderActivity(summary.recent_activity || []);
     renderRecent(summary.recent_networks);
     renderInventory(summary.devices_by_type, summary.devices);
-    renderAssessments(summary.recent_assessments);
     renderDistribution(summary.risk_distribution);
   } catch (error) {
     toast(error.message, "error");

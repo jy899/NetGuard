@@ -440,8 +440,10 @@ class RealDiscoveryEngine:
             add("running-config", {"text": c.running_config, "platform": c.platform},
                 f"running configuration ({len(c.running_config.splitlines())} lines) collected.")
             add("interface-status", {"ports": c.ports, "stp": c.stp}, f"{len(c.ports)} interfaces with state and counters.")
-            if kind == "switch":
+            if kind == "switch" or c.vlans:
                 add("vlan-table", {"vlans": c.vlans}, f"{len(c.vlans)} VLANs.")
+            # Routers with switch modules and layer 3 switches classified as routers also learn MAC addresses.
+            if kind == "switch" or c.macs:
                 add("mac-table", {"rows": c.macs}, f"{len(c.macs)} learned MAC addresses.")
             add("lldp-table", {"rows": c.neighbours}, f"{len(c.neighbours)} LLDP/CDP neighbours.")
             if c.logs:

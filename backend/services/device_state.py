@@ -117,6 +117,9 @@ def apply_config(db: Session, device: Device, dev: config_import.Dev, warnings: 
         meta["ospf_process"] = {**meta.get("ospf_process", {}), device.name: dev.ospf_process}
         network.metadata_json = meta
     db.flush()
+    # The rows above were replaced with bulk deletes; loaded collections would still show the old VLANs, routes
+    # and ACL entries to the next model load in this session (post-change verification compared stale data).
+    db.expire(device, ["interfaces", "vlans", "static_routes", "acl_rules"])
     return {"interfaces": len(dev.ifs), "routes": len(dev.routes), "acl_rules": sum(len(v) for v in dev.acls.values())}
 
 

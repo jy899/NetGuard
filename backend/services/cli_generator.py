@@ -14,8 +14,7 @@ from backend.services.network_model import NetworkModel
 from backend.services.interface_naming import canonical_name, platform_for
 
 OSPF_PROCESS = 1
-HEADER = ("# Generated commands; sent automatically only for an approved change (laboratory devices, or production "
-          "devices when permission-based self-healing is enabled).")
+HEADER = "# Generated commands; sent only for an approved change or an Auto-Fix, with backup and automatic undo."
 
 
 def _acl_address(spec: str) -> str:

@@ -18,7 +18,7 @@
         <div class="ng-page-header">
           <div>
             <h2>Networks</h2>
-            <p>Import an EVE-NG or GNS3 lab, discover an authorised network range or import configurations, then investigate in one topology workspace.</p>
+            <p>Import a lab, scan a network or import configurations.</p>
           </div>
           <div class="d-flex gap-2">
             <button class="btn btn-outline-primary" id="btn-import" title="Build a network from Cisco IOS show output">
@@ -34,32 +34,37 @@
         <div class="tab-content">
           <section class="tab-pane fade show active" id="virtual-panel" role="tabpanel" aria-labelledby="virtual-tab">
             <div class="d-flex justify-content-between align-items-center mb-3"><h3 class="h5 mb-0">Virtual laboratories</h3><span class="badge text-bg-light border">EVE-NG · GNS3</span></div>
-            <div class="ng-card p-4 mb-3"><div class="row g-3 align-items-end"><div class="col-md-9"><label class="form-label" for="virtual-project">Laboratory workspace</label><select id="virtual-project" class="form-select"><option value="new">Import a new laboratory</option></select></div><div class="col-md-3"><button id="virtual-open" class="btn btn-primary w-100" disabled>Open Topology</button></div></div><p id="virtual-project-summary" class="small text-muted-ng mt-2 mb-0">Select a saved laboratory workspace or import a lab from an EVE-NG or GNS3 server below.</p></div>
+            <div class="ng-card p-4 mb-3"><div class="row g-3 align-items-end"><div class="col-md-9"><label class="form-label" for="virtual-project">Laboratory workspace</label><select id="virtual-project" class="form-select"><option value="new">Import a new laboratory</option></select></div><div class="col-md-3"><button id="virtual-open" class="btn btn-primary w-100" disabled>Open Topology</button></div></div><p id="virtual-project-summary" class="small text-muted-ng mt-2 mb-0">Open a saved lab or import one below.</p></div>
             <div id="virtual-new-options" class="row g-3 mb-4">
-              <div class="col-md-6"><div class="ng-card p-4 h-100"><i class="bi bi-hdd-network text-primary fs-3"></i><h4 class="h5 mt-3">EVE-NG</h4><p class="small text-muted-ng">Sign in to your EVE-NG server, choose a lab and import its nodes, cables and startup configurations.</p><button class="btn btn-outline-primary w-100" data-provider="eve-ng">Connect to EVE-NG</button></div></div>
-              <div class="col-md-6"><div class="ng-card p-4 h-100"><i class="bi bi-bezier2 text-primary fs-3"></i><h4 class="h5 mt-3">GNS3</h4><p class="small text-muted-ng">Connect to a GNS3 server (default port 3080), choose a project and import its nodes, links and consoles.</p><button class="btn btn-outline-primary w-100" data-provider="gns3">Connect to GNS3</button></div></div>
+              <div class="col-md-6"><div class="ng-card p-4 h-100"><i class="bi bi-hdd-network text-primary fs-3"></i><h4 class="h5 mt-3">EVE-NG</h4><p class="small text-muted-ng">Import nodes, cables and startup configs from an EVE-NG lab.</p><button class="btn btn-outline-primary w-100" data-provider="eve-ng">Connect to EVE-NG</button></div></div>
+              <div class="col-md-6"><div class="ng-card p-4 h-100"><i class="bi bi-bezier2 text-primary fs-3"></i><h4 class="h5 mt-3">GNS3</h4><p class="small text-muted-ng">Import nodes, links and consoles from a GNS3 project.</p><button class="btn btn-outline-primary w-100" data-provider="gns3">Connect to GNS3</button></div></div>
             </div>
             <div class="ng-card p-4 mb-4 d-none" id="provider-box"><form id="provider-form"><div class="d-flex justify-content-between"><h4 class="h5" id="provider-title">Lab connection</h4><button type="button" id="provider-cancel" class="btn-close ms-auto" aria-label="Close connection form"></button></div><div class="alert alert-danger py-2 small d-none" data-form-error role="alert"></div>
               <div class="row g-3"><div class="col-md-4"><label class="form-label" for="provider-server">Server address</label><input id="provider-server" name="server" class="form-control" maxlength="200" placeholder="http://192.168.56.10" required></div><div class="col-md-3"><label class="form-label" for="provider-user">Username</label><input id="provider-user" name="username" class="form-control" autocomplete="off"></div><div class="col-md-3"><label class="form-label" for="provider-password">Password</label><input type="password" id="provider-password" name="password" class="form-control" autocomplete="off"></div><div class="col-md-2 d-flex align-items-end"><button class="btn btn-primary w-100" id="provider-connect">Connect</button></div></div>
 </form><div id="provider-labs" class="mt-3" aria-live="polite"></div></div>
-            <div class="ng-card p-4 mb-4"><div class="d-flex justify-content-between align-items-center gap-3 flex-wrap"><div><h4 class="h6 mb-1">Example networks</h4><p class="small text-muted-ng mb-0">Offline example configurations for learning the analysis workflow. No device or server is contacted.</p></div><div class="d-flex gap-2"><select id="example-scenario" class="form-select form-select-sm" aria-label="Example network"><option value="mixed">Multiple incidents</option><option value="healthy">Healthy baseline</option><option value="vlan">VLAN incident</option><option value="routing">Routing incident</option><option value="interface">Interface shutdown</option><option value="acl">Firewall / ACL incident</option><option value="loop">Switching loop</option><option value="missing-link">Missing connection</option><option value="ip-conflict">IP address conflict</option></select><button class="btn btn-outline-secondary btn-sm text-nowrap" id="btn-example">Create Example</button></div></div></div>
+            <details class="ng-group ng-practice-group mt-2 mb-4" id="practice-section">
+              <summary><i class="bi bi-chevron-right ng-group-caret"></i><i class="bi bi-mortarboard text-primary"></i>
+                <span><span class="fw-semibold d-block">Practice networks</span><span class="small text-muted-ng">Ready-made networks with a known fault. Learn, demo and try fixes without touching a real device.</span></span>
+                <span class="ng-count ms-auto" id="practice-count"></span></summary>
+              <div class="p-3"><div class="row g-3" id="practice-grid"></div></div>
+            </details>
           </section>
           <section class="tab-pane fade" id="real-panel" role="tabpanel" aria-labelledby="real-tab">
             <div class="ng-card p-4 mb-3">
               <form id="scan-form" novalidate>
                 <div class="row g-2 align-items-end">
                   <div class="col-lg-4"><label class="form-label" for="scan-interface">Network adapter</label><select id="scan-interface" class="form-select"><option value="custom">Detecting…</option></select></div>
-                  <div class="col-lg-5"><label class="form-label" for="scan-target">Range</label><input id="scan-target" class="form-control mono" placeholder="192.168.1.0/24" maxlength="43" aria-describedby="scan-note"></div>
+                  <div class="col-lg-5"><label class="form-label" for="scan-target">Range</label><input id="scan-target" class="form-control mono" placeholder="192.168.1.0/24, 192.168.20.0/24" maxlength="400" aria-describedby="scan-note"></div>
                   <div class="col-lg-3"><button class="btn btn-primary w-100" id="scan-start"><i class="bi bi-radar me-1"></i>Scan</button></div>
                 </div>
                 <details class="mt-3" id="scan-options"><summary class="small fw-semibold">Options</summary>
                   <div class="row g-2 mt-1">
                     <div class="col-md-6"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="scan-auto" checked><label class="form-check-label small" for="scan-auto">Try my saved credential profiles</label></div>
-                      <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="scan-follow" checked><label class="form-check-label small" for="scan-follow">Follow neighbours into other private subnets (up to 3 hops)</label></div></div>
+                      <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="scan-follow" checked><label class="form-check-label small" for="scan-follow">Scan other VLANs and subnets my routers report</label></div></div>
                     <div class="col-md-3"><label class="form-label small" for="scan-excluded">Exclude</label><input id="scan-excluded" class="form-control form-control-sm mono" placeholder="192.168.1.5, 192.168.1.200/29" maxlength="600"></div>
                     <div class="col-md-3"><label class="form-label small" for="scan-untrusted">Untrusted segments</label><input id="scan-untrusted" class="form-control form-control-sm mono" placeholder="192.168.50.0/24" maxlength="600"></div>
                   </div></details>
-                <p class="small text-muted-ng mt-2 mb-0" id="scan-note">Scan only networks you are authorised to scan; starting a scan records that authorisation. Discovery is read-only.</p>
+                <p class="small text-muted-ng mt-2 mb-0" id="scan-note">Read-only. Scan only networks you are allowed to scan.</p>
                 <div class="alert alert-danger small py-2 mt-2 mb-0 d-none" id="scan-error" role="alert"></div>
               </form>
               <div id="scan-progress" class="mt-3 d-none" role="status" aria-live="polite">
@@ -139,17 +144,12 @@
             <label class="btn btn-primary btn-sm mt-3 mb-0" for="imp-project"><i class="bi bi-folder2-open me-1"></i>Choose Files</label>
             <input type="file" id="imp-project" class="d-none" multiple accept=".pkt,.pka,.gns3,.gns3project,.gns3p,.unl,.zip,.xml,.cfg,.txt,.conf,.ios,.log">
             <div class="small mt-2" id="imp-project-list" aria-live="polite"></div>
-            <div class="small text-muted-ng mt-2">Devices, cables, startup configurations and endpoint addresses are read from the project. Required flows come from the project's scenarios or are inferred from the analysis expectations; you can edit them afterwards.</div>
+            <div class="small text-muted-ng mt-2">Devices, cables, configs and addresses are read from the file. You can edit required flows later.</div>
           </div>
           <div class="mt-3 d-none" id="imp-single" role="status"></div>
           <details class="mt-3" id="imp-paste"><summary class="small fw-semibold">Paste configurations instead</summary>
-          <p class="small text-muted-ng mt-2 mb-3">Paste the output of <code>show running-config</code> (and optionally
-            <code>show cdp neighbors</code>) from each Cisco IOS or IOS-XE device, or the <code>vtysh</code> running
-            configuration of an FRRouting router.</p>
+          <p class="small text-muted-ng mt-2 mb-3">Paste <code>show running-config</code> (and optionally <code>show cdp neighbors</code>) for each device. <button type="button" class="btn btn-link btn-sm p-0 align-baseline" id="imp-sample">Load an example</button></p>
           <div class="row g-3">
-            <div class="col-12 d-flex gap-2 flex-wrap">
-              <button type="button" class="btn btn-light border btn-sm" id="imp-sample"><i class="bi bi-lightning me-1"></i>Load example configurations</button>
-            </div>
             <div class="col-12">
               <label class="form-label" for="imp-configs">Device output <span class="text-danger">*</span></label>
               <textarea class="form-control font-monospace small" id="imp-configs" name="configs" rows="9" spellcheck="false"

@@ -31,7 +31,7 @@ export async function openTerminal(device) {
   try { profiles = (await api.get("/credential-profiles")).filter((p) => (p.method || "ssh") === "ssh"); } catch { /* optional */ }
   const body = `<form id="term-form" novalidate>
     <div class="alert alert-danger py-2 small d-none" data-term-error></div>
-    <p class="small text-muted-ng">${lab ? "Laboratory device: the session has full access." : "Production device: the session is <strong>read-only</strong> unless your user group may configure production devices. Changes belong in Validation &amp; Changes."} Every session is recorded in Reports &amp; History.</p>
+    <p class="small text-muted-ng">${lab ? "Laboratory device: the session has full access." : "Real-network device: <strong>read-only</strong> unless your group may configure it."} Every session is recorded in Reports &amp; History.</p>
     <div class="row g-2">
       <div class="col-sm-4"><label class="form-label" for="term-transport">Connection</label><select class="form-select" id="term-transport">
         <option value="auto">Automatic</option>${consoleUrl ? `<option value="console">Lab console (${escapeHtml(consoleUrl)})</option>` : ""}
@@ -133,12 +133,17 @@ function terminalWindow(device, session) {
 
 // ------------------------------------------------------------------ web management portals
 export function openUrl(url, title) {
-  const desktop = window.pywebview?.api?.open_portal;
-  if (desktop) {
-    window.pywebview.api.open_portal(url, title).catch(() => window.open(url, "_blank", "noopener"));
+  const desktop = window.pywebview?.api;
+  // Desktop app: a device window first, then the default browser. Browser mode: a new tab.
+  const external = () => {
+    if (desktop?.open_external) desktop.open_external(url).then((ok) => { if (!ok) toast(`Could not open ${url}. Copy the address into a browser.`, "danger"); }).catch(() => window.open(url, "_blank", "noopener"));
+    else window.open(url, "_blank", "noopener");
+  };
+  if (desktop?.open_portal) {
+    desktop.open_portal(url, title).then((ok) => { if (!ok) external(); }).catch(external);
     return;
   }
-  window.open(url, "_blank", "noopener");
+  external();
 }
 
 function portalRows(data, device) {
@@ -159,13 +164,35 @@ export async function openPortals(device) {
   if (!device) return;
   let data;
   try { data = await api.get(`/devices/${device.id}/portals`); } catch (exc) { toast(exc.message, "danger"); return; }
-  const body = `<div data-portal-list>${portalRows(data, device)}</div>
+  const body = `<form class="input-group input-group-sm mb-2" data-portal-form>
+      <input class="form-control mono" data-portal-address aria-label="Address" placeholder="192.168.1.1:8443" value="${escapeHtml(data.ip || "")}">
+      <button class="btn btn-primary" type="submit"><i class="bi bi-box-arrow-up-right me-1"></i>Open</button></form>
+    <div class="small text-muted-ng mb-2">IP, IP:port or a full URL. HTTP or HTTPS is detected.</div>
+    <div data-portal-list>${portalRows(data, device)}</div>
     ${data.lab_console ? `<p class="small">Laboratory console: <span class="mono">${escapeHtml(data.lab_console)}</span> (use Open CLI).</p>` : ""}
     <div class="border rounded p-2 small"><div class="fw-semibold mb-1">Find more management interfaces</div>
       <p class="text-muted-ng mb-2">A read-only TCP connect scan of ${escapeHtml(data.ip || "the device")}; every open port is checked for HTTP and HTTPS (FortiGate 10443, UniFi 8443, appliances on 8080 and so on).${data.last_scan ? ` Last scan: ${escapeHtml(data.last_scan.range)} at ${escapeHtml(data.last_scan.at)}, open ports ${escapeHtml((data.last_scan.open_ports || []).join(", ") || "none")}.` : ""}</p>
       <div class="d-flex gap-2 flex-wrap"><button class="btn btn-sm btn-outline-primary" data-portal-scan="common">Common ports</button><button class="btn btn-sm btn-outline-primary" data-portal-scan="well-known">1–1024 and well-known</button><button class="btn btn-sm btn-outline-secondary" data-portal-scan="all">All 65,535 ports</button></div>
       <div class="progress mt-2 d-none" style="height:6px" data-portal-progress><div class="progress-bar" style="width:0%"></div></div><div class="small text-muted-ng mt-1" data-portal-status></div></div>`;
   const { el } = modal("portal-modal", `Web GUI · ${escapeHtml(device.name)}`, body);
+  el.querySelector("[data-portal-form]").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const address = el.querySelector("[data-portal-address]").value.trim();
+    if (!address) return;
+    const button = event.currentTarget.querySelector("button");
+    button.disabled = true;
+    try {
+      const site = await api.post(`/devices/${device.id}/portals/open`, { address });
+      if (!site.verified) toast(`No web page answered at ${site.url}. Opening it anyway.`, "warning");
+      openUrl(site.url, `${device.name} web management`);
+      const fresh = await api.get(`/devices/${device.id}/portals`);
+      el.querySelector("[data-portal-list]").innerHTML = portalRows(fresh, device);
+    } catch (exc) {
+      toast(exc.message, "danger");
+    } finally {
+      button.disabled = false;
+    }
+  });
   el.addEventListener("click", async (event) => {
     const openBtn = event.target.closest("[data-portal-open]");
     if (openBtn) { openUrl(openBtn.dataset.portalOpen, `${device.name} web management`); return; }
@@ -197,4 +224,24 @@ export async function openPortals(device) {
       el.querySelectorAll("[data-portal-scan]").forEach((b) => { b.disabled = false; });
     }
   });
+}
+
+// ------------------------------------------------------------------ what is on each switch port
+export async function openPortClients(device) {
+  if (!device) return;
+  let data;
+  try { data = await api.get(`/devices/${device.id}/port-clients`); } catch (exc) { toast(exc.message, "danger"); return; }
+  const kind = { uplink: ["Uplink", "bg-secondary"], shared: ["Shared", "bg-warning text-dark"], edge: ["Edge", "bg-success"] };
+  const rows = data.ports.map((p) => {
+    const [label, cls] = kind[p.kind] || kind.edge;
+    const clients = p.clients.map((c) => `<div class="d-flex gap-2 small"><span class="mono">${escapeHtml(c.ip || "no IP")}</span><span class="mono text-muted-ng">${escapeHtml(c.mac)}</span><span>${escapeHtml(c.name || c.vendor || "")}</span>${c.vlan ? `<span class="text-muted-ng">VLAN ${escapeHtml(String(c.vlan))}</span>` : ""}</div>`).join("");
+    return `<tr><td class="mono text-nowrap">${escapeHtml(p.port)}</td>
+      <td class="text-nowrap"><span class="badge ${cls}">${label}</span>${p.neighbour ? ` <span class="small">${escapeHtml(p.neighbour)}</span>` : ""}</td>
+      <td>${p.kind === "uplink" ? `<span class="small text-muted-ng">${p.count} behind ${escapeHtml(p.neighbour)}</span>` : clients}${p.count > p.clients.length ? `<div class="small text-muted-ng">and ${p.count - p.clients.length} more</div>` : ""}</td></tr>`;
+  }).join("");
+  const body = data.read
+    ? `<div class="small text-muted-ng mb-2">${data.clients} client(s) on ${data.ports.length} port(s)</div>
+       <div class="table-responsive" style="max-height:60vh"><table class="table table-sm align-middle mb-0"><thead><tr><th>Port</th><th>Type</th><th>Connected</th></tr></thead><tbody>${rows || `<tr><td colspan="3" class="small text-muted-ng">No MAC addresses learned.</td></tr>`}</tbody></table></div>`
+    : `<p class="small mb-0">${escapeHtml(data.note)}</p>`;
+  modal("port-clients-modal", `Ports · ${escapeHtml(device.name)}`, body);
 }

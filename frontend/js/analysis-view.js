@@ -163,7 +163,7 @@ export function renderAnalysisPanel(a, change = null, user = null) {
         <div class="mono">Proposed: ${escapeHtml(typeof item.proposed === 'object' ? JSON.stringify(item.proposed) : item.proposed)}</div></div>`).join('')}
     </div>` : ''}
     ${a.change.commands && a.change.commands.length ? `<div class="ng-panel-section"><div class="ng-panel-title">Device Commands</div>${commandsBlock(a.change.commands, `chg-${a.change.id}`)}
-      <p class="small text-muted-ng mt-2 mb-0">After IT Manager approval, NetGuard sends these commands only to a laboratory device, with a configuration backup, post-change verification and automatic rollback.</p></div>` : ""}
+      <p class="small text-muted-ng mt-2 mb-0">After approval NetGuard applies these commands, checks the result and undoes them automatically if the check fails. A backup before the fix is optional.</p></div>` : ""}
     <div class="ng-panel-section"><div class="ng-panel-title">Explanation</div>${explanationBlock(a)}</div>
     <div class="ng-panel-section"><div class="ng-panel-title">Findings <span>${a.findings.length}</span></div>${findingsBlock(a.findings)}</div>
     ${(a.advisories || []).length ? `<div class="ng-panel-section"><div class="ng-panel-title">Security &amp; hygiene advisories</div>${advisoriesBlock(a.advisories)}</div>` : ""}

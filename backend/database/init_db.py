@@ -77,7 +77,7 @@ def _rebuild_table(name: str, model) -> None:
 _ORPHAN_RULES = (
     ("devices", "network_id", "networks"), ("links", "network_id", "networks"),
     ("network_intents", "network_id", "networks"), ("changes", "network_id", "networks"),
-    ("labs", "network_id", "networks"), ("credential_assignments", "network_id", "networks"),
+    ("credential_assignments", "network_id", "networks"),
     ("ai_insights", "network_id", "networks"), ("change_outcomes", "network_id", "networks"),
     ("interfaces", "device_id", "devices"), ("vlans", "device_id", "devices"), ("static_routes", "device_id", "devices"),
     ("acl_rules", "device_id", "devices"), ("device_configs", "device_id", "devices"),
@@ -179,11 +179,11 @@ def upgrade_schema() -> list[str]:
 def reencrypt_legacy(db) -> int:
     """Move secrets written by earlier versions (key derived from the token secret) to the vault key."""
     from backend.core import vault
-    from backend.models import CredentialAssignment, CredentialProfile, SavedLogin
+    from backend.models import CredentialAssignment, CredentialProfile
 
     changed = 0
     for model, fields in ((CredentialProfile, ("password_enc", "priv_password_enc")),
-                          (CredentialAssignment, ("password_enc",)), (SavedLogin, ("password_enc",))):
+                          (CredentialAssignment, ("password_enc",))):
         for row in db.query(model):
             for name in fields:
                 value = getattr(row, name)
@@ -192,9 +192,7 @@ def reencrypt_legacy(db) -> int:
                     if plain is not None:
                         setattr(row, name, vault.encrypt(plain))
                         changed += 1
-    # Lab-server logins were only kept by earlier versions; NetGuard no longer stores them, so remove them.
-    removed = db.query(SavedLogin).delete()
-    if changed or removed:
+    if changed:
         db.commit()
     return changed
 
@@ -221,7 +219,7 @@ def init_db(reset: bool = False) -> None:
     with SessionLocal() as db:
         from backend.services import account_service
         account_service.ensure_groups(db)
-        user = auth_service.ensure_default_user(db, settings)
+        auth_service.ensure_default_user(db, settings)
         account_service.ensure_groups(db)
         reencrypt_legacy(db)
         correct_model_flags(db)
@@ -236,7 +234,7 @@ def main() -> None:
     init_db(reset=args.reset)
     settings = get_settings()
     print(f"Database ready: {settings.database_url}")
-    print(f"Default login: {settings.default_username} / (change it after the first sign-in)")
+    print(f"Default login: {settings.default_username} / (see README or NETGUARD_DEFAULT_PASSWORD)")
 
 
 if __name__ == "__main__":

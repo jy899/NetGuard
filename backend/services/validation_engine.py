@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from backend.services.forwarding import FlowAnalyzer, evaluate_acl, l3_link_state, ospf_adjacency
+from backend.services.forwarding import FlowAnalyzer, l3_link_state, ospf_adjacency
 from backend.services.network_model import NetworkModel
 from backend.services.rules import RULES, pack_of
 

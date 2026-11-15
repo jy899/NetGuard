@@ -37,6 +37,7 @@ def to_out(db: Session, change: Change) -> ChangeOut:
                   "decided_at": change.decided_at, "note": change.decision_note,
                   "assessment_id": change.approved_assessment_id},
         lab_device=bool(change.device and change.device.is_lab),
+        simulated=bool(change.network and change.network.is_simulated),
         self_healing=_self_healing(db, change),
         latest_assessment=AssessmentBrief(
             id=latest.id, total_risk_score=latest.total_risk_score, risk_level=latest.risk_level,
@@ -53,7 +54,7 @@ def _self_healing(db, change) -> dict:
     settings = remediation_service.self_healing_settings()
     latest = db.scalar(select(ChangeExecution).where(ChangeExecution.change_id == change.id)
                        .order_by(ChangeExecution.id.desc()).limit(1))
-    return {"production": not bool(change.device and change.device.is_lab), "enabled": settings["enabled"],
+    return {"production": not bool(change.device and change.device.is_lab) and not bool(change.network and change.network.is_simulated),
             "confirm_minutes": settings["confirm_minutes"],
             "confirm_by": (latest.verification or {}).get("confirm_by") if latest is not None and latest.status == "awaiting_confirm" else None}
 

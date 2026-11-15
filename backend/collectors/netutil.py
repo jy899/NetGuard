@@ -10,7 +10,6 @@ import platform
 import re
 import shutil
 import socket
-import ssl
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -286,30 +285,6 @@ def upnp_description(location: str, scope, timeout: float = 2.0) -> dict | None:
     return fields or None
 
 
-def http_title(ip: str, port: int, tls: bool, timeout: float = 2.0) -> str | None:
-    """The <title> of the web page a device serves on / (often names the product)."""
-    try:
-        raw = socket.create_connection((ip, port), timeout=timeout)
-        sock = raw
-        if tls:
-            context = ssl.create_default_context()
-            context.check_hostname, context.verify_mode = False, ssl.CERT_NONE
-            sock = context.wrap_socket(raw, server_hostname=ip)
-        with sock:
-            sock.settimeout(timeout)
-            sock.sendall(f"GET / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: NetGuard\r\n\r\n".encode())
-            data = b""
-            while len(data) < 16384:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-    except (OSError, ssl.SSLError):
-        return None
-    match = re.search(rb"<title[^>]*>([^<]{1,120})</title>", data, re.I)
-    return match.group(1).decode("utf-8", "replace").strip() or None if match else None
-
-
 def tcp_open(ip: str, port: int, timeout: float = 0.7) -> bool:
     try:
         with socket.create_connection((ip, port), timeout=timeout):
@@ -326,54 +301,6 @@ def ssh_banner(ip: str, port: int = 22, timeout: float = 2.0) -> str | None:
             line = data.splitlines()[0].strip() if data else ""
             return line[:120] if line.startswith("SSH-") else None
     except OSError:
-        return None
-
-
-def http_server(ip: str, port: int, tls: bool, timeout: float = 2.0) -> str | None:
-    """The Server header (or HTTP status line) of a HEAD request; certificate errors are expected on devices."""
-    try:
-        raw = socket.create_connection((ip, port), timeout=timeout)
-        sock = raw
-        if tls:
-            context = ssl.create_default_context()
-            context.check_hostname, context.verify_mode = False, ssl.CERT_NONE
-            sock = context.wrap_socket(raw, server_hostname=ip)
-        with sock:
-            sock.settimeout(timeout)
-            sock.sendall(f"HEAD / HTTP/1.0\r\nHost: {ip}\r\nUser-Agent: NetGuard\r\n\r\n".encode())
-            data = sock.recv(2048).decode("latin-1", "replace")
-    except (OSError, ssl.SSLError):
-        return None
-    server = re.search(r"^Server:\s*(.+)$", data, re.I | re.M)
-    if server:
-        return server.group(1).strip()[:80]
-    status = data.splitlines()[0].strip() if data else ""
-    return status[:80] or None
-
-
-def tls_subject(ip: str, port: int = 443, timeout: float = 2.0) -> dict | None:
-    """Subject and issuer names of the certificate presented on a TLS port (not verified)."""
-    try:
-        context = ssl.create_default_context()
-        context.check_hostname, context.verify_mode = False, ssl.CERT_NONE
-        with socket.create_connection((ip, port), timeout=timeout) as raw, \
-                context.wrap_socket(raw, server_hostname=ip) as sock:
-            der = sock.getpeercert(binary_form=True)
-    except (OSError, ssl.SSLError):
-        return None
-    if not der:
-        return None
-    try:
-        from cryptography import x509
-        from cryptography.x509.oid import NameOID
-
-        cert = x509.load_der_x509_certificate(der)
-
-        def name(n):
-            parts = {a.oid: a.value for a in n}
-            return parts.get(NameOID.COMMON_NAME) or parts.get(NameOID.ORGANIZATION_NAME)
-        return {"subject": name(cert.subject), "issuer": name(cert.issuer)}
-    except Exception:  # noqa: BLE001 - a malformed device certificate is not fatal
         return None
 
 
@@ -507,14 +434,6 @@ def local_networks(max_prefix: int = 22) -> dict:
             pass
     rows.sort(key=lambda r: (r["gateway"] is None, r["virtual"], r["interface"]))
     return {"interfaces": rows, "gateway": gateway, "suggested": rows[0]["scan_target"] if rows else None}
-
-
-def private(ip: str) -> bool:
-    try:
-        address = ipaddress.IPv4Address(ip)
-    except ValueError:
-        return False
-    return address.is_private and not (address.is_loopback or address.is_link_local or address.is_multicast)
 
 
 # ------------------------------------------------------------------ this computer and its Wi-Fi association

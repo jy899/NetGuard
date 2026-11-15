@@ -1,7 +1,6 @@
 """Persistence boundary for simulated providers and common analysis reports."""
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
 
 from sqlalchemy import select

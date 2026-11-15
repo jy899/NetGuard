@@ -7,7 +7,7 @@ import { initShell, setPageTitle } from "../layout.js";
 import { renderAnalysisPanel } from "../analysis-view.js";
 import { fixableIssues, renderHealthPanel } from "../health-view.js";
 import { RISK_COLORS } from "../risk.js";
-import { confirmDialog, escapeHtml, toast, withBusy } from "../ui.js";
+import { confirmDialog, escapeHtml, formatDate, toast, withBusy } from "../ui.js";
 import { createChangeForm } from "../topology/change-form.js";
 import { createDialogs } from "../topology/dialogs.js";
 import { createWorkflow } from "../topology/workflow.js";
@@ -28,7 +28,7 @@ import { renderConnections, renderDevice, renderLink, renderNoNetwork, renderOve
 import { clearTopology, linksForDevice, loadTopology, store } from "../topology/store.js";
 import { environmentLabel } from "../evidence-view.js";
 import { isSmartDiscovery, openAuthentication, renderReport } from "../discovery/discovery-flow.js";
-import { openPortals, openTerminal } from "../topology/console.js";
+import { openPortClients, openPortals, openTerminal } from "../topology/console.js";
 
 const LAST_NETWORK_KEY = "netguard.lastNetwork";
 
@@ -108,10 +108,10 @@ function renderSmartBanner(banner, network) {
   const session = network.metadata_json?.discovery_session || {};
   const summary = `Credential-free discovery · Devices ${store.devices.size} · Connections ${confirmed} confirmed / ${inferred} inferred / ${logical} logical / ${unknown} unknown · Authenticated ${authenticated}${failed ? ` · ${failed} failed` : ""}`;
   const detail = session.state === "prompting" && required
-    ? `${required} credential request(s) pending · review them in the Discovery Report. Every request is optional.`
-    : !links.length ? "Devices are identified, but no connection is verified yet. Authenticating a switch or router reads its LLDP/CDP and MAC tables; an IP response never establishes a cable."
-    : required ? `${required} device(s) could add detail after authentication. Dashed lines are inferred (one-sided neighbour or MAC table); solid lines are confirmed by both ends.`
-    : "All available evidence is collected. Solid lines are confirmed by LLDP/CDP from both ends; dashed lines are inferred; dotted lines are logical (shared routed subnet).";
+    ? `${required} login request(s) waiting in the Discovery Report (optional).`
+    : !links.length ? "Devices found. Sign in to a switch or router to see how they are cabled."
+    : required ? `Sign in to ${required} more device(s) for more detail. Solid = confirmed, dashed = likely.`
+    : "Discovery complete. Solid = confirmed, dashed = likely, dotted = same subnet.";
   banner.innerHTML = `<div class="d-flex justify-content-between align-items-center gap-2 flex-wrap w-100"><div class="min-w-0"><div class="small fw-semibold" id="discovery-stage-summary">${escapeHtml(summary)}</div><div class="small text-muted-ng" id="discovery-stage-detail">${escapeHtml(detail)}</div></div><div class="d-flex gap-2 flex-wrap"><button type="button" class="btn btn-sm btn-primary" data-discovery-report>Discovery Report</button><button type="button" class="btn btn-sm btn-light border" data-discovery-connections>Connections</button></div></div>`;
 }
 
@@ -189,7 +189,15 @@ function setupDiscoveryAccess() {
   state.workflow = createWorkflow({
     onChanged: async (change, { collected = false, executed = false } = {}) => {
       if (collected) { await afterDiscoveryChange(); return; }
-      if (executed) await refresh();
+      if (executed) {
+        await refresh();
+        await refreshIssuesQuietly();
+        // A kept fix: go back to the (refreshed) problem list so the result is visible at once.
+        if (change?.status === "applied" && state.health && state.analysis?.change.id === change.id) {
+          closeAnalysis();
+          return;
+        }
+      }
       if (change && state.analysis?.change.id === change.id) {
         state.analysis.change = change;
         if (executed) {
@@ -222,15 +230,15 @@ function updateCanvasEmpty() {
   if (!store.network) {
     ui.canvasEmpty.innerHTML = `
       <div><i class="bi bi-hdd-network fs-2 text-muted"></i>
-        <h4 class="h6 mt-2">No network selected</h4>
-        <p class="small text-muted mb-3">Create a network first, then build its topology here.</p>
-        <a class="btn btn-sm btn-primary" href="/networks?create=1"><i class="bi bi-plus-lg me-1"></i>Create Network</a></div>`;
+        <h4 class="h6 mt-2">No devices yet</h4>
+        <p class="small text-muted mb-3">Scan a network or import a lab to draw your map.</p>
+        <a class="btn btn-sm btn-primary" href="/networks"><i class="bi bi-plus-lg me-1"></i>Add Network</a></div>`;
     ui.canvasEmpty.classList.remove("d-none");
   } else if (store.devices.size === 0) {
     ui.canvasEmpty.innerHTML = `
       <div><i class="bi bi-diagram-3 fs-2 text-muted"></i>
-        <h4 class="h6 mt-2">This topology is empty</h4>
-        <p class="small text-muted mb-3">Add routers, switches, firewalls, PCs, servers or an Internet cloud from the palette above.</p>
+        <h4 class="h6 mt-2">This map is empty</h4>
+        <p class="small text-muted mb-3">Add devices from the bar above, or scan a network.</p>
         <button class="btn btn-sm btn-primary" data-empty-add><i class="bi bi-plus-lg me-1"></i>Add First Device</button></div>`;
     ui.canvasEmpty.classList.remove("d-none");
     ui.canvasEmpty.querySelector("[data-empty-add]").addEventListener("click", () => state.dialogs.device.openCreate());
@@ -250,7 +258,7 @@ function renderPanel() {
     return;
   }
   if (state.health && state.showHealth) {
-    ui.panel.innerHTML = renderHealthPanel(state.health, state.skipped, store.network);
+    ui.panel.innerHTML = renderHealthPanel(state.health, state.skipped, store.network, state.user);
     return;
   }
   if (state.showConnections) {
@@ -265,12 +273,35 @@ function renderPanel() {
   const { selection } = state;
   if (selection?.kind === "device" && store.devices.has(selection.id)) {
     ui.panel.innerHTML = healthBanner + renderDevice(store.devices.get(selection.id), analysis);
+    loadBackups(selection.id);
   } else if (selection?.kind === "link" && store.links.has(selection.id)) {
     ui.panel.innerHTML = healthBanner + renderLink(store.links.get(selection.id), analysis);
   } else {
     state.selection = null;
     ui.panel.innerHTML = healthBanner + renderOverview(analysis, state.health);
   }
+}
+
+/** Backups saved for the selected device (optional before a fix, or Back up now). */
+async function loadBackups(deviceId) {
+  const box = ui.panel.querySelector(`[data-backups="${deviceId}"] [data-backup-list]`);
+  if (!box) return;
+  try {
+    const rows = await api.get(`/devices/${deviceId}/backups`);
+    if (!ui.panel.contains(box)) return;
+    box.innerHTML = rows.length
+      ? `<ul class="ng-conn-list">${rows.slice(0, 8).map((b) => `<li><span>${formatDate(b.created_at)} <span class="mono text-muted-ng">${escapeHtml(b.sha256.slice(0, 8))}</span></span>
+          <button class="btn btn-sm btn-link p-0" data-action="download-backup" data-backup-id="${b.id}" data-device-id="${deviceId}">Download</button></li>`).join("")}</ul>
+         ${rows.length > 8 ? `<div class="small text-muted-ng">${rows.length - 8} older backup(s) not shown.</div>` : ""}`
+      : "No backups yet. Tick “Back up first” when you apply a fix, or press Back up now.";
+  } catch (error) {
+    box.textContent = error.status === 403 ? "Your group cannot read device configurations." : error.message;
+  }
+}
+
+function backupFilename(deviceId, suffix) {
+  const name = store.devices.get(Number(deviceId))?.name || "device";
+  return `${name}-${suffix}.cfg`.replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
 // ----------------------------------------------------------------- analysis
@@ -464,6 +495,40 @@ async function createAndSubmitFix(issue, fix) {
   return { change: await api.post(`/changes/${change.id}/submit`), assessment, submitted: true };
 }
 
+/** Keep the issue list current after a fix is applied, without saving another analysis record. */
+async function refreshIssuesQuietly() {
+  if (!state.health) return;
+  try {
+    const report = await api.get(`/networks/${store.network.id}/health-check`);
+    state.health = { ...report, record_id: state.health.record_id, network_id: store.network.id };
+    if (state.showHealth) renderPanel();
+  } catch { /* the next Analyze run refreshes it */ }
+}
+
+/** Auto-Fix: validate one fix, then open the apply dialog (optional backup, apply, check, automatic undo). No approval wait. */
+async function autoFix(issueIndex, fixIndex, button, kind = "issue") {
+  const issue = issueOf(kind, issueIndex);
+  const fix = issue.fixes[fixIndex];
+  // No separate confirmation: the apply dialog shows the fix, its commands and the backup option.
+  await withBusy(button, async () => {
+    try {
+      const change = await api.post("/changes", {
+        device_id: fix.device_id, interface_id: fix.interface_id, change_type: fix.change_type, parameters: fix.parameters,
+        reason: `Auto-Fix for ${issue.rule_id} ${issue.name}: ${fix.label}`,
+      });
+      const assessment = await api.post(`/changes/${change.id}/analyze`);
+      showAnalysis(change, assessment);
+      if (assessment.validation_result === "INCOMPLETE" || assessment.recommendation === "DO_NOT_DEPLOY") {
+        toast("NetGuard stopped this fix. The panel shows why.", "warning");
+        return;
+      }
+      state.workflow.execute(change, assessment);
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
 /** Validate one fix on a model copy and submit it for IT Manager approval (asks first). */
 async function applyFix(issueIndex, fixIndex, button, kind = "issue") {
   const issue = issueOf(kind, issueIndex);
@@ -516,6 +581,47 @@ async function fixAll(button) {
       }
     }
     toast(`Submitted ${submitted} change(s) for approval${blocked.length ? `; ${blocked.length} blocked by validation (${blocked.join(", ")})` : ""}. Track them under Changes.`, blocked.length ? "warning" : "success", 6000);
+  });
+}
+
+/** Practice networks: apply every verified fix at once, one after another, re-checking after each one. */
+async function fixAllNow(button) {
+  const count = fixableIssues(state.health, state.skipped).length;
+  let backup = false;
+  const remember = (event) => { if (event.target.id === "fixall-backup") backup = event.target.checked; };
+  document.addEventListener("change", remember);
+  const ok = await confirmDialog({
+    title: `Fix ${count} problem${count === 1 ? "" : "s"} now?`,
+    message: `<p class="small">NetGuard applies the recommended fix for each problem, highest risk first, and checks the network after every fix. A fix that fails its check is undone. Only this practice network changes.</p>
+      <div class="form-check"><input class="form-check-input" type="checkbox" id="fixall-backup"><label class="form-check-label small" for="fixall-backup">Back up each device first</label></div>`,
+    confirmLabel: "Fix All Now",
+  });
+  document.removeEventListener("change", remember);
+  if (!ok) return;
+  await withBusy(button, async () => {
+    const done = [], undone = [], tried = new Set();
+    for (let round = 0; round < 20; round += 1) {
+      const report = await api.get(`/networks/${store.network.id}/health-check`);
+      const next = fixableIssues(report, state.skipped).map(({ issue }) => ({ issue, fix: issue.fixes[0] }))
+        .find(({ issue, fix }) => !tried.has(`${issue.rule_id}|${fix.label}`));
+      if (!next) break;
+      tried.add(`${next.issue.rule_id}|${next.fix.label}`);
+      try {
+        const change = await api.post("/changes", { device_id: next.fix.device_id, interface_id: next.fix.interface_id, change_type: next.fix.change_type,
+          parameters: next.fix.parameters, reason: `Fix All for ${next.issue.rule_id} ${next.issue.name}: ${next.fix.label}` });
+        const assessment = await api.post(`/changes/${change.id}/analyze`);
+        if (assessment.validation_result === "INCOMPLETE" || assessment.recommendation === "DO_NOT_DEPLOY") { undone.push(next.issue.rule_id); continue; }
+        const result = await api.post(`/changes/${change.id}/execute`, { confirm: true, backup });
+        (result.execution.status === "applied" ? done : undone).push(next.issue.rule_id);
+      } catch (error) {
+        undone.push(next.issue.rule_id);
+        toast(`${next.issue.rule_id}: ${error.message}`, "error");
+      }
+    }
+    await refresh();
+    await refreshIssuesQuietly();
+    showHealth();
+    toast(`${done.length} fixed${undone.length ? `, ${undone.length} not fixed (${[...new Set(undone)].join(", ")})` : ""}.`, undone.length ? "warning" : "success", 6000);
   });
 }
 
@@ -658,7 +764,47 @@ async function refreshAfterEdit() {
   await refresh();
 }
 
+/** Without ?network the workspace asks which network to open instead of guessing. */
+function showNetworkPicker(networks) {
+  const picker = document.getElementById("network-picker");
+  const last = Number(localStorage.getItem(LAST_NETWORK_KEY));
+  clearTopology();
+  setNetworkControlsEnabled(false);
+  setPageTitle("Network Topology Workspace", "Choose a network");
+  ui.networkSelect.insertAdjacentHTML("afterbegin", '<option value="" data-placeholder>Choose a network…</option>');
+  ui.networkSelect.value = "";
+  ui.networkSelect.disabled = false;
+  ui.canvasEmpty.classList.add("d-none");
+  renderPanel();
+  const sorted = [...networks].sort((a, b) => (b.id === last) - (a.id === last) || String(b.updated_at).localeCompare(String(a.updated_at)));
+  picker.innerHTML = `
+    <div class="d-flex justify-content-between align-items-end flex-wrap gap-2 mb-3">
+      <div><h3 class="h5 mb-1">Choose a network</h3><p class="small text-muted-ng mb-0">Pick the network you want to view, analyse or fix.</p></div>
+      <a class="btn btn-sm btn-light border" href="/networks"><i class="bi bi-plus-lg me-1"></i>Add Network</a>
+    </div>
+    <div class="row g-3">${sorted.map((n) => `
+      <div class="col-md-6 col-xl-4"><a class="ng-card ng-picker-card" href="/topology?network=${n.id}" data-open-network="${n.id}">
+        <span class="ng-practice-icon"><i class="bi bi-diagram-3"></i></span>
+        <span class="ng-picker-text">
+          <span class="d-flex align-items-center gap-2 flex-wrap"><span class="fw-semibold">${escapeHtml(n.name)}</span>${n.id === last ? '<span class="ng-count ok">Last opened</span>' : ""}</span>
+          <span class="d-block small text-muted-ng mt-1">${escapeHtml(environmentLabel(n))} · ${n.device_count} device${n.device_count === 1 ? "" : "s"} · ${n.link_count} link${n.link_count === 1 ? "" : "s"}</span>
+          <span class="d-block small text-muted-ng">Updated ${formatDate(n.updated_at)}</span>
+        </span></a></div>`).join("")}
+    </div>`;
+  picker.classList.remove("d-none");
+  picker.querySelectorAll("[data-open-network]").forEach((card) => card.addEventListener("click", (event) => {
+    event.preventDefault();
+    openNetwork(Number(card.dataset.openNetwork));
+  }));
+}
+
+function hideNetworkPicker() {
+  document.getElementById("network-picker")?.classList.add("d-none");
+  ui.networkSelect.querySelector("[data-placeholder]")?.remove();
+}
+
 async function openNetwork(networkId) {
+  if (!networkId) return false;
   try {
     const topology = await api.get(`/networks/${networkId}/topology`);
     loadTopology(topology);
@@ -666,6 +812,7 @@ async function openNetwork(networkId) {
     toast(error.message, "error");
     return false;
   }
+  hideNetworkPicker();
   localStorage.setItem(LAST_NETWORK_KEY, String(networkId));
   const url = new URL(window.location.href);
   url.searchParams.set("network", networkId);
@@ -864,6 +1011,7 @@ function bindCanvas() {
 function bindToolbar() {
   ui.networkSelect.addEventListener("change", async () => {
     const target = Number(ui.networkSelect.value);
+    if (!target) return;
     if (state.dirty) {
       const ok = await confirmDialog({
         title: "Discard unsaved layout?",
@@ -984,6 +1132,18 @@ function bindPanel() {
       case "execute-change":
         state.workflow.execute(state.analysis.change, state.analysis.assessment);
         break;
+      case "download-config":
+        api.download(`/devices/${target.dataset.deviceId}/config/download`, backupFilename(target.dataset.deviceId, "config")).catch((error) => toast(error.message, "error"));
+        break;
+      case "download-backup":
+        api.download(`/backups/${target.dataset.backupId}/download`, backupFilename(target.dataset.deviceId, `backup-${target.dataset.backupId}`)).catch((error) => toast(error.message, "error"));
+        break;
+      case "backup-now":
+        withBusy(target, async () => {
+          try { await api.post(`/devices/${target.dataset.deviceId}/backups`); toast("Backup saved.", "success"); loadBackups(Number(target.dataset.deviceId)); }
+          catch (error) { toast(error.message, "error"); }
+        });
+        break;
       case "show-executions":
         state.workflow.showExecutions(state.analysis.change);
         break;
@@ -1015,6 +1175,9 @@ function bindPanel() {
       case "open-gui":
         openPortals(device || store.devices.get(Number(target.dataset.deviceId)));
         break;
+      case "port-clients":
+        openPortClients(device || store.devices.get(Number(target.dataset.deviceId)));
+        break;
       case "discovery-auth":
         authenticateDevices([Number(target.dataset.deviceId)]);
         break;
@@ -1032,8 +1195,17 @@ function bindPanel() {
       case "apply-fix":
         applyFix(Number(target.dataset.issueIndex), Number(target.dataset.fixIndex), target, target.dataset.kind);
         break;
+      case "fix-all-now":
+        fixAllNow(target);
+        break;
       case "fix-all":
         fixAll(target);
+        break;
+      case "auto-fix":
+        autoFix(Number(target.dataset.issueIndex), Number(target.dataset.fixIndex), target, target.dataset.kind);
+        break;
+      case "open-change":
+        openChangeFromUrl(Number(target.dataset.changeId));
         break;
       case "skip-issue":
         state.skipped.add(state.health.issues[Number(target.dataset.issueIndex)].key);
@@ -1149,10 +1321,13 @@ async function main() {
   }
 
   const requested = Number(new URLSearchParams(window.location.search).get("network"));
-  const remembered = Number(localStorage.getItem(LAST_NETWORK_KEY));
   const ids = networks.map((n) => n.id);
-  const target = [requested, remembered].find((id) => ids.includes(id)) ?? ids[0];
   if (requested && !ids.includes(requested)) toast(`Network ${requested} was not found.`, "warning");
+  if (!ids.includes(requested)) {
+    showNetworkPicker(networks);
+    return;
+  }
+  const target = requested;
   const requestedChange = Number(new URLSearchParams(window.location.search).get("change"));
   const opened = await openNetwork(target);
   if (opened && requestedChange) await openChangeFromUrl(requestedChange);

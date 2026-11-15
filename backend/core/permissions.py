@@ -9,13 +9,13 @@ cannot be deleted):
 * IT Managers: read everything, run analyses and save reports, approve or reject changes.
 
 Separation of duties does not depend on the groups alone: a change can never be approved by the account that
-submitted it. The built-in ``admin`` account always keeps every permission, so the system cannot be locked out.
+submitted it. Groups with Auto-Fix (``change.auto_fix``) skip the approval wait; the safeguards still run. The
+built-in ``admin`` account always keeps every permission, so the system cannot be locked out.
 """
 from __future__ import annotations
 
 import re
 
-from fastapi import Request
 
 from backend.core.errors import ForbiddenError
 
@@ -32,6 +32,7 @@ USERS = "users.manage"
 TERMINAL = "device.terminal"
 TERMINAL_CONFIG = "device.terminal_config"
 PRODUCTION = "change.execute_production"
+AUTO_FIX = "change.auto_fix"
 
 PERMISSIONS: dict[str, str] = {
     VIEW: "View networks, topologies, analyses and reports",
@@ -46,7 +47,8 @@ PERMISSIONS: dict[str, str] = {
     USERS: "Manage user accounts and user groups",
     TERMINAL: "Open device CLI terminals (SSH, Telnet, lab console) and web management portals",
     TERMINAL_CONFIG: "Enter configuration commands in a terminal on a production (real-network) device",
-    PRODUCTION: "Execute approved changes on production (real-network) devices (permission-based self-healing)",
+    PRODUCTION: "Apply approved changes to real-network devices (backup, check and automatic undo)",
+    AUTO_FIX: "Auto-Fix: apply validated fixes in one click without waiting for approval (lab and real network)",
 }
 
 GROUP_ADMIN, GROUP_ENGINEER, GROUP_MANAGER = "Administrators", "Network Engineers", "IT Managers"
@@ -57,7 +59,7 @@ BUILTIN_GROUPS: dict[str, tuple[str, list[str]]] = {
     GROUP_MANAGER: ("Reviews analyses and approves or rejects changes", [VIEW, ANALYSIS, APPROVE, IMPORT_EXPORT]),
 }
 # Permissions added after a database was created are granted once to the built-in groups whose defaults include them.
-ADDED_PERMISSIONS = (TERMINAL, TERMINAL_CONFIG, PRODUCTION)
+ADDED_PERMISSIONS = (TERMINAL, TERMINAL_CONFIG, PRODUCTION, AUTO_FIX)
 # Earlier versions stored a fixed role per account.
 LEGACY_ROLE_GROUP = {"Administrator": GROUP_ADMIN, "Network Engineer": GROUP_ENGINEER, "IT Manager": GROUP_MANAGER}
 
@@ -94,10 +96,6 @@ def can_approve(user) -> bool:
     return has(user, APPROVE)
 
 
-def require_modify(user) -> None:
-    require(user, PROPOSE)
-
-
 # Write requests and the permission each needs (first match wins; anything else needs network.edit).
 _WRITE_RULES: list[tuple[re.Pattern, str | None]] = [(re.compile(p), perm) for p, perm in (
     (r"^/api/auth/", None),
@@ -105,7 +103,7 @@ _WRITE_RULES: list[tuple[re.Pattern, str | None]] = [(re.compile(p), perm) for p
     (r"^/api/credential-profiles(/|$)", CREDENTIALS),
     (r"^/api/changes/\d+/(approve|reject)$", APPROVE),
     (r"^/api/changes/\d+/(execute|apply|confirm|rollback)$", EXECUTE),
-    (r"^/api/devices/\d+/(terminal|portals/scan)$", TERMINAL),
+    (r"^/api/devices/\d+/(terminal|portals/scan|portals/open)$", TERMINAL),
     (r"^/api/terminal/", TERMINAL),
     (r"^/api/settings/self-healing$", USERS),
     (r"^/api/changes(/|$)", PROPOSE),
@@ -114,7 +112,7 @@ _WRITE_RULES: list[tuple[re.Pattern, str | None]] = [(re.compile(p), perm) for p
     (r"^/api/networks/(import|import-project|samples|scenario|demo)$", IMPORT_EXPORT),
     (r"^/api/(discovery|labs)(/|$)", DISCOVERY),
     (r"^/api/networks/\d+/collect$", DISCOVERY),
-    (r"^/api/ai/retrain$", USERS),
+    (r"^/api/ai/(retrain|learning|releases/\d+/restore)$", USERS),
     (r"^/api/ai/", ANALYSIS),
 )]
 _WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -128,7 +126,3 @@ def required_permission(method: str, path: str) -> str | None:
             return permission
     return EDIT
 
-
-def write_allowed(user, request: Request) -> bool:
-    permission = required_permission(request.method, request.url.path)
-    return permission is None or has(user, permission)

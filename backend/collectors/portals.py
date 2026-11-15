@@ -94,11 +94,19 @@ def _request(ip: str, port: int, tls: bool, path: str, timeout: float) -> dict |
         sock.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: NetGuard portal detector\r\n"
                      "Accept: text/html,*/*\r\nConnection: close\r\n\r\n".encode())
         data = b""
-        while len(data) < 32768:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
+        try:
+            while len(data) < 32768:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if b"</html>" in chunk.lower():
+                    break
+        except (OSError, ssl.SSLError):
+            # Embedded web servers often ignore "Connection: close" and keep the socket open: a timeout after the
+            # response arrived is still a response.
+            if not data:
+                return None
     except (OSError, ssl.SSLError):
         return None
     finally:
@@ -147,6 +155,12 @@ def probe(ip: str, port: int, timeout: float = 2.5) -> dict | None:
         first = _request(ip, port, tls, "/", timeout)
         if first is None:
             continue
+        if not tls and (first["status"] in (400, 426, 497) or re.search(r"https port|ssl|tls", first["body"][:600], re.I)):
+            # A TLS port answers a plain request with "400 The plain HTTP request was sent to HTTPS port": the
+            # portal is HTTPS, whatever the port number.
+            secure = _request(ip, port, True, "/", timeout)
+            if secure is not None:
+                tls, first = True, secure
         scheme = "https" if tls else "http"
         url = f"{scheme}://{ip}" + ("" if (tls and port == 443) or (not tls and port == 80) else f":{port}") + "/"
         pages, current, path = [first], first, "/"
@@ -178,6 +192,44 @@ def probe(ip: str, port: int, timeout: float = 2.5) -> dict | None:
                 "vendor": vendor, "product": product, "matched": matched, "login_page": login,
                 "certificate": cert, "self_signed": bool(cert and cert.get("self_signed"))}
     return None
+
+
+def parse_address(text: str) -> tuple[str | None, str, int | None, str]:
+    """(scheme or None, host, port or None, path) of what the operator typed: 10.0.0.1, 10.0.0.1:8443,
+    router.lan:8080/admin or a full http(s) URL. Raises ValueError for anything else."""
+    text = (text or "").strip()
+    scheme = None
+    if "://" in text:
+        scheme, _, text = text.partition("://")
+        scheme = scheme.lower()
+        if scheme not in ("http", "https"):
+            raise ValueError("Only http and https addresses can be opened.")
+    host_port, slash, path = text.partition("/")
+    host, colon, port = host_port.rpartition(":") if ":" in host_port else (host_port, "", "")
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host or ""):
+        raise ValueError("Enter an address such as 192.168.1.1, 192.168.1.1:8443 or https://192.168.1.1:8443/.")
+    if colon and not (port.isdigit() and 1 <= int(port) <= 65535):
+        raise ValueError("The port must be a number from 1 to 65535.")
+    return scheme, host, int(port) if colon else None, "/" + path if slash else "/"
+
+
+def resolve(text: str, timeout: float = 3.0) -> dict:
+    """The URL to open for a typed address. Without a scheme, HTTPS and HTTP are both tried on the port (443
+    then 80 when no port is given) and the one that answers wins; the result says whether it was verified."""
+    scheme, host, port, path = parse_address(text)
+    ports = [port] if port else ([443] if scheme == "https" else [80] if scheme == "http" else [443, 80])
+    for candidate in ports:
+        site = probe(host, candidate, timeout)
+        if site is not None and (scheme is None or site["scheme"] == scheme or port is not None):
+            if path != "/" and urlparse(site["url"]).path in ("", "/"):
+                site["url"] = site["url"].rstrip("/") + path
+            return {**site, "verified": True, "typed": text.strip()}
+    guess = scheme or ("https" if (port or 443) in TLS_FIRST else "http")
+    first = port or (443 if guess == "https" else 80)
+    default = (guess == "https" and first == 443) or (guess == "http" and first == 80)
+    return {"port": first, "scheme": guess, "url": f"{guess}://{host}" + ("" if default else f":{first}") + path,
+            "status": None, "title": None, "server": None, "vendor": None, "product": None, "matched": None,
+            "login_page": False, "certificate": None, "self_signed": False, "verified": False, "typed": text.strip()}
 
 
 def detect(ip: str, ports, timeout: float = 2.5) -> list[dict]:

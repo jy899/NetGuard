@@ -60,6 +60,7 @@ class ChangeOut(BaseModel):
     updated_at: datetime
     approval: dict = Field(default_factory=dict)
     lab_device: bool = False
+    simulated: bool = False
     self_healing: dict = Field(default_factory=dict)
     assessment_count: int = 0
     latest_assessment: AssessmentBrief | None = None

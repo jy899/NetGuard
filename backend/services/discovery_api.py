@@ -32,13 +32,31 @@ def _resolve_target(target: str | None) -> ipaddress.IPv4Network:
     return _target(target)
 
 
+def _resolve_targets(target: str | None) -> tuple[ipaddress.IPv4Network, list[ipaddress.IPv4Network]]:
+    """The first range and any further ranges (other VLANs) typed after it, comma or space separated."""
+    from backend.services.discovery import subnets
+
+    parts = subnets.split_targets(target)
+    first = _resolve_target(parts[0] if parts else None)
+    extra = []
+    for part in parts[1:]:
+        net = _target(part)
+        if net.prefixlen < smart.MAX_PREFIX:
+            raise ValidationFailed(f"Each range can be at most a /{smart.MAX_PREFIX} (1,024 addresses): {part}.")
+        if net != first and net not in extra:
+            extra.append(net)
+    if len(extra) > smart.MAX_EXTRA_RANGES:
+        raise ValidationFailed(f"Scan at most {smart.MAX_EXTRA_RANGES + 1} ranges at once.")
+    return first, extra
+
+
 def scan(db: Session, user, target: str | None = None, name: str | None = None, authorized_scope: bool = False,
          excluded: list[str] | None = None, untrusted: list[str] | None = None, auto_credentials: bool = False,
          follow_neighbours: bool = False, max_depth: int = smart.MAX_CRAWL_DEPTH, progress=None) -> dict:
-    network_range = _resolve_target(target)
+    network_range, extra_ranges = _resolve_targets(target)
     network = smart.scan(db, user, network_range, name, authorized_scope, excluded, untrusted,
                          auto_credentials=auto_credentials, follow_neighbours=follow_neighbours, max_depth=max_depth,
-                         progress=progress)
+                         progress=progress, extra_ranges=extra_ranges)
     out = result(db, user, network.id)
     history_service.record(db, user, network.id, "scan", "Network discovery completed",
                            {"device_count": len(out["devices"]), "link_count": len(out["links"]), "status": "completed"},
@@ -123,12 +141,13 @@ _JOBS: dict[str, dict] = {}
 _JOBS_LOCK = _threading.Lock()
 PHASES = {"sweep": "Finding live hosts (ICMP, TCP, ARP)", "services": "Identifying services, names and SNMP agents",
           "identify": "Reading UPnP, banners and certificates", "done": "Correlating evidence",
-          "credentials": "Reading devices with your credentials", "neighbours": "Following neighbours"}
+          "credentials": "Reading devices with your credentials", "neighbours": "Following neighbours",
+          "subnets": "Scanning other VLANs and subnets"}
 
 
 def start_scan(db: Session, user, **params) -> dict:
     """Validate and start a scan in the background; poll job_status() for progress and the result."""
-    network_range = _resolve_target(params.get("target"))
+    network_range, extra_ranges = _resolve_targets(params.get("target"))
     if not params.get("authorized_scope"):
         raise ValidationFailed("Confirm that you are authorized to scan this address range before starting discovery.")
     if network_range.prefixlen < smart.MAX_PREFIX:
@@ -136,13 +155,13 @@ def start_scan(db: Session, user, **params) -> dict:
     smart.parse_scope(params.get("excluded"), "Excluded addresses")
     smart.parse_scope(params.get("untrusted"), "Untrusted segments")
     job_id = _uuid.uuid4().hex
-    total = network_range.num_addresses - (2 if network_range.prefixlen < 31 else 0)
+    total = sum(n.num_addresses - (2 if n.prefixlen < 31 else 0) for n in [network_range, *extra_ranges])
     job = {"id": job_id, "user_id": user.id, "state": "running", "phase": "sweep", "phase_label": PHASES["sweep"],
            "done": 0, "total": max(total, 1), "found": 0, "network_id": None, "error": None,
            "target": str(network_range), "started": _time.time()}
     with _JOBS_LOCK:
         _JOBS[job_id] = job
-    params = {**params, "target": str(network_range)}
+    params = {**params, "target": ", ".join(str(n) for n in [network_range, *extra_ranges])}
 
     def progress(phase, done, total_, found):
         with _JOBS_LOCK:

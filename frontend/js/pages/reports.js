@@ -49,17 +49,34 @@ async function loadList() {
         <p>Run a network scan or analysis, or save a change assessment.</p><a class="btn btn-sm btn-primary" href="/networks">Open Networks</a></div>`;
       return;
     }
-    el.innerHTML = `<div class="table-responsive"><table class="table ng-table">
-      <thead><tr><th>Record</th><th>Network</th><th>Summary</th><th>Result</th><th>Created</th><th></th></tr></thead>
-      <tbody>${items
-        .map(({ item: a, kind }) => kind === "assessment" ? `<tr>
+    // One card per network so it is always clear which project a record belongs to.
+    const groups = new Map();
+    for (const entry of items) {
+      const key = entry.item.network_id ?? entry.item.network_name ?? "none";
+      if (!groups.has(key)) groups.set(key, { id: entry.item.network_id, name: entry.item.network_name || "Deleted network", items: [] });
+      groups.get(key).items.push(entry);
+    }
+    el.innerHTML = [...groups.values()].map((g) => {
+      const kinds = {};
+      for (const { kind } of g.items) kinds[recordLabel(kind)] = (kinds[recordLabel(kind)] || 0) + 1;
+      const chips = Object.entries(kinds).map(([label, n]) => `<span class="ng-count">${n} ${escapeHtml(label.toLowerCase())}</span>`).join("");
+      return `<details class="ng-group" open>
+        <summary><i class="bi bi-chevron-right ng-group-caret"></i><i class="bi bi-diagram-3 text-primary"></i>
+          <span class="fw-semibold">${escapeHtml(g.name)}</span><span class="small text-muted-ng">${g.items.length} record${g.items.length === 1 ? "" : "s"}</span>
+          <span class="d-flex gap-1 flex-wrap">${chips}</span>
+          ${g.id ? `<a class="btn btn-sm btn-light border ms-auto" href="/topology?network=${g.id}"><i class="bi bi-box-arrow-up-right me-1"></i>Open map</a>` : ""}</summary>
+        <div class="table-responsive"><table class="table ng-table ng-group-table">
+        <colgroup><col style="width:17%"><col style="width:40%"><col style="width:16%"><col style="width:15%"><col style="width:12%"></colgroup>
+        <thead><tr><th>Record</th><th>Summary</th><th>Result</th><th>Created</th><th></th></tr></thead>
+        <tbody>${g.items.map(({ item: a, kind }) => kind === "assessment" ? `<tr>
           <td><span class="ng-type-badge">Change assessment</span><div class="small text-muted-ng mt-1">#${a.id}${a.saved ? " · Saved" : ""}</div></td>
-          <td>${escapeHtml(a.network_name || "")}</td><td><div class="fw-semibold">${escapeHtml(a.change.device)} · ${escapeHtml(a.change.change_type_label)}</div><div class="small mono text-muted-ng">${escapeHtml(a.change.current_value)} → ${escapeHtml(a.change.proposed_value)}</div></td>
+          <td><div class="fw-semibold">${escapeHtml(a.change.device)} · ${escapeHtml(a.change.change_type_label)}</div><div class="small mono text-muted-ng">${escapeHtml(a.change.current_value)} → ${escapeHtml(a.change.proposed_value)}</div></td>
           <td>${riskBadge(a.risk_level)}<div class="small mt-1">Validation ${escapeHtml(a.validation_result)}</div></td><td class="small text-muted-ng">${formatDate(a.created_at)}</td>
           <td class="actions"><a class="btn btn-sm btn-primary" href="/reports?assessment=${a.id}">View Report</a></td></tr>`
-          : `<tr><td><span class="ng-type-badge">${escapeHtml(recordLabel(kind))}</span><div class="small text-muted-ng mt-1">#${a.id} · Sample Data</div></td><td>${escapeHtml(a.network_name || "")}</td>
+          : `<tr><td><span class="ng-type-badge">${escapeHtml(recordLabel(kind))}</span><div class="small text-muted-ng mt-1">#${a.id}</div></td>
             <td><div class="fw-semibold">${escapeHtml(a.title)}</div><div class="small text-muted-ng">${escapeHtml(historySummary(a.summary))}</div></td><td><span class="ng-badge-plain">${escapeHtml(a.status || "Saved")}</span>${a.issue_count ? `<div class="small mt-1">${a.issue_count} issue(s)</div>` : ""}</td><td class="small text-muted-ng">${formatDate(a.created_at)}</td><td class="actions"><a class="btn btn-sm btn-primary" href="/reports?history=${a.id}">View Report</a></td></tr>`)
-        .join("")}</tbody></table></div>`;
+          .join("")}</tbody></table></div></details>`;
+    }).join("");
   } catch (error) {
     toast(error.message, "error");
   }
@@ -125,7 +142,7 @@ function bindExports(path, filename) {
 }
 
 function recordLabel(kind) {
-  return { scan: "Network scan", analysis: "Network analysis", report: "Analysis report" }[kind] || "Network activity";
+  return { scan: "Network scan", analysis: "Network analysis", report: "Analysis report", assessment: "Change assessment", approval: "Approval", remediation: "Applied change", collection: "Config collection", connection: "Import", network: "Network created", terminal: "Console session" }[kind] || "Network activity";
 }
 
 function historySummary(summary) {
@@ -168,7 +185,7 @@ function renderHistory(record) {
   };
   detailView.innerHTML = `<div class="ng-report">
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3 ng-no-print"><a class="btn btn-sm btn-light border" href="/reports">Back to history</a><div class="d-flex flex-wrap gap-2">${record.network_id ? `<a class="btn btn-sm btn-outline-primary" href="/topology?network=${record.network_id}">Open Topology</a>` : '<span class="small text-muted-ng align-self-center">Original network removed · saved snapshot available</span>'}<div class="btn-group btn-group-sm" role="group" aria-label="Export report"><button class="btn btn-outline-primary" data-export="pdf"><i class="bi bi-file-earmark-pdf me-1"></i>PDF</button><button class="btn btn-outline-primary" data-export="html">HTML</button><button class="btn btn-outline-primary" data-export="json">JSON</button></div><button class="btn btn-sm btn-light border" id="btn-print"><i class="bi bi-printer me-1"></i>Print</button></div></div>
-    <div class="ng-card ng-card-body"><div class="d-flex justify-content-between gap-3 flex-wrap"><div><div class="small text-muted-ng mb-1">${escapeHtml(recordLabel(record.kind))} #${record.id}</div><h1>${escapeHtml(record.title)}</h1><div class="small text-muted-ng">${escapeHtml(record.network_name || snapshot.network?.name || "")} · ${formatDate(record.created_at)}${record.created_by_username ? ` · ${escapeHtml(record.created_by_username)}` : ""}</div></div>${snapshot.network?.is_simulated || record.simulated ? '<span class="ng-sample-indicator align-self-start">Offline example</span>' : ""}</div><p class="mb-0 mt-3">${escapeHtml(historySummary(record.summary))}</p></div>
+    <div class="ng-card ng-card-body"><div class="d-flex justify-content-between gap-3 flex-wrap"><div><div class="small text-muted-ng mb-1">${escapeHtml(recordLabel(record.kind))} #${record.id}</div><h1>${escapeHtml(record.title)}</h1><div class="small text-muted-ng">${escapeHtml(record.network_name || snapshot.network?.name || "")} · ${formatDate(record.created_at)}${record.created_by_username ? ` · ${escapeHtml(record.created_by_username)}` : ""}</div></div>${snapshot.network?.is_simulated || record.simulated ? '<span class="ng-sample-indicator align-self-start">Practice network</span>' : ""}</div><p class="mb-0 mt-3">${escapeHtml(historySummary(record.summary))}</p></div>
     ${analysis.status ? `<div class="alert ${healthy ? 'alert-success' : 'alert-warning'} mt-3" role="status" data-report="health"><strong>${analysisStatus} · ${(analysis.advisories || []).length} security advisories</strong><div class="small mt-1">${flowCount ? `${passingFlows}/${flowCount} required flow checks passed.` : 'No required flow checks are available.'} ${escapeHtml(scopeText(analysis.evidence_scope || environmentLabel(snapshot.network || topology.network || {})))}. Analysis uses the saved model.</div></div>` : ''}
     ${analysis.analysis_complete === false ? '<div class="ng-card ng-card-body mt-3 border-warning" role="status"><strong>Analysis incomplete</strong><p class="small mb-0 mt-1">Some device, interface or connection evidence is unavailable. Unknown results do not establish successful connectivity.</p></div>' : ""}
     <div class="ng-card ng-card-body mt-3"><h2 class="mt-0">Device Inventory (${devices.length})</h2><div class="table-responsive"><table class="table ng-table"><thead><tr><th>Hostname</th><th>IP Address</th><th>Type / Model</th><th>Authentication</th></tr></thead><tbody>${devices.map((device) => `<tr><td>${escapeHtml(device.name || device.hostname || "Unknown")}</td><td class="mono">${escapeHtml(device.management_ip || device.ip || "Unknown")}</td><td>${escapeHtml([deviceLabel(device.role || device.device_type || device.type), device.model].filter(Boolean).join(" · "))}</td><td>${escapeHtml(device.auth_status || device.authentication_status || discovery[device.id]?.auth_status || "Not recorded")}</td></tr>`).join("") || '<tr><td colspan="4">No device inventory in this snapshot.</td></tr>'}</tbody></table></div></div>

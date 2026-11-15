@@ -23,21 +23,26 @@
               <label class="visually-hidden" for="network-select">Network</label>
               <select class="form-select form-select-sm" id="network-select"></select>
               <span class="divider"></span>
-              <button class="btn btn-sm btn-outline-primary" id="btn-add-device" data-requires-network><i class="bi bi-plus-lg me-1"></i>Add Device</button>
-              <button class="btn btn-sm btn-outline-primary" id="btn-add-link" data-requires-network><i class="bi bi-share me-1"></i>Add Link</button>
-              <button class="btn btn-sm btn-outline-secondary" id="btn-connect" data-requires-network aria-pressed="false"
-                title="Click a source device, then a destination device"><i class="bi bi-bezier2 me-1"></i>Connect</button>
-              <button class="btn btn-sm btn-outline-success" id="btn-health" data-requires-network
-                title="Analyze the stored configuration, connections and diagnostic evidence"><i class="bi bi-heart-pulse me-1"></i>Analyze Network</button>
-              <button class="btn btn-sm btn-outline-secondary" id="btn-connections" data-requires-network><i class="bi bi-ethernet me-1"></i>Connections</button>
+              <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" id="btn-edit-menu" data-bs-toggle="dropdown" aria-expanded="false" data-requires-network><i class="bi bi-pencil-square me-1"></i>Edit</button>
+                <ul class="dropdown-menu">
+                  <li><button class="dropdown-item" id="btn-add-device" data-requires-network><i class="bi bi-plus-lg me-2"></i>Add device</button></li>
+                  <li><button class="dropdown-item" id="btn-add-link" data-requires-network><i class="bi bi-share me-2"></i>Add link</button></li>
+                  <li><button class="dropdown-item" id="btn-connect" data-requires-network aria-pressed="false"><i class="bi bi-bezier2 me-2"></i>Connect by clicking</button></li>
+                  <li><hr class="dropdown-divider"></li>
+                  <li><button class="dropdown-item" id="btn-connections" data-requires-network><i class="bi bi-ethernet me-2"></i>All connections</button></li>
+                </ul>
+              </div>
+              <button class="btn btn-sm btn-success" id="btn-health" data-requires-network
+                title="Find problems and their fixes"><i class="bi bi-heart-pulse me-1"></i>Analyze</button>
               <button class="btn btn-sm btn-outline-primary d-none" id="btn-device-access" data-requires-network><i class="bi bi-key me-1"></i>Device Access</button>
               <button class="btn btn-sm btn-outline-primary d-none" id="btn-collect" data-requires-network data-requires-modify
-                title="Read the running configuration of routers and switches (show commands only)"><i class="bi bi-download me-1"></i>Collect Configs</button>
-              <button class="btn btn-sm btn-outline-primary" id="btn-report" data-requires-network><i class="bi bi-file-earmark-text me-1"></i>Save Report</button>
+                title="Read running configurations (show commands only)"><i class="bi bi-download me-1"></i>Collect Configs</button>
+              <button class="btn btn-sm btn-outline-primary" id="btn-report" data-requires-network title="Save a report"><i class="bi bi-file-earmark-text me-1"></i>Report</button>
               <span class="divider"></span>
               <button class="btn btn-sm btn-light border" id="btn-layout" data-requires-network title="Auto-arrange devices"><i class="bi bi-diagram-2"></i></button>
               <button class="btn btn-sm btn-light border" id="btn-reload" data-requires-network title="Reload topology from database"><i class="bi bi-arrow-clockwise"></i></button>
-              <button class="btn btn-sm btn-outline-secondary" id="btn-details-toggle" aria-controls="side-panel" aria-expanded="true" title="Hide details panel"><i class="bi bi-layout-sidebar-reverse me-1" aria-hidden="true"></i><span>Hide Details</span></button>
+              <button class="btn btn-sm btn-light border" id="btn-details-toggle" aria-controls="side-panel" aria-expanded="true" title="Hide details panel"><i class="bi bi-layout-sidebar-reverse" aria-hidden="true"></i><span class="visually-hidden">Hide Details</span></button>
             </div>
             <div class="ng-palette">
               <span class="ng-type-badge ng-environment-badge" id="environment-badge">Manual model</span>
@@ -55,24 +60,22 @@
                 <button class="btn btn-light" id="btn-connect-cancel">Cancel</button>
               </div>
               <div class="ng-canvas-empty d-none" id="canvas-empty"></div>
+              <div class="ng-picker d-none" id="network-picker"></div>
               <details class="ng-map-legend" id="map-legend">
-                <summary>Map legend</summary>
-                <div class="ng-legend-heading">Line pattern = evidence</div>
-                <div><span class="sw copper"></span>Confirmed (LLDP) / modeled · copper</div>
-                <div><span class="sw fibre"></span>Confirmed · fibre (SFP)</div>
-                <div><span class="sw inferred"></span>Inferred (MAC table, one-sided CDP, spanning tree)</div>
-                <div><span class="sw wireless"></span>Wireless (Wi-Fi association or AP radio)</div>
-                <div><span class="sw logical"></span>Logical (same subnet / gateway / route hop)</div>
-                <div class="ng-legend-heading">Line colour = state</div>
+                <summary>Legend</summary>
+                <div><span class="sw copper"></span>Confirmed cable</div>
+                <div><span class="sw fibre"></span>Fibre</div>
+                <div><span class="sw inferred"></span>Inferred (MAC table, CDP, STP)</div>
+                <div><span class="sw wireless"></span>Wireless</div>
+                <div><span class="sw logical"></span>Logical (same subnet or route)</div>
                 <div><span class="sw blocked"></span>Blocked (STP)</div>
                 <div><span class="sw down"></span>Down</div>
-                <div class="ng-legend-heading">Device border = discovery</div>
-                <div><span class="nd full"></span>Fully analyzed</div>
-                <div><span class="nd partial"></span>Partially analyzed</div>
-                <div><span class="nd auth"></span>Authentication required</div>
-                <div><span class="nd failed"></span>Authentication failed</div>
-                <div><span class="nd unverified"></span>Unknown or unverified</div>
-                <div class="small text-muted-ng">"Unknown Port": the port was not reported by any evidence.</div>
+                <div class="ng-legend-heading">Device border</div>
+                <div><span class="nd full"></span>Read</div>
+                <div><span class="nd partial"></span>Partly read</div>
+                <div><span class="nd auth"></span>Login needed</div>
+                <div><span class="nd failed"></span>Login failed</div>
+                <div><span class="nd unverified"></span>Not verified</div>
               </details>
               <div class="ng-legend d-none" id="analysis-legend">
                 <div><span class="sw" id="legend-path"></span><span id="legend-path-label">Affected path</span></div>

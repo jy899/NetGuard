@@ -1,8 +1,24 @@
+# Keeps files NetGuard creates on your PC out of GitHub.
+
+# Python environment and caches (Start_NetGuard.cmd recreates them)
 .venv/
+.venv.broken-*/
 __pycache__/
-*.pyc
-data/netguard.db
+*.py[cod]
+.pytest_cache/
+.test-tmp/
+
+# Windows app build output (Build_NetGuard_App.cmd)
+build/
+dist/
+
+# NetGuard data created on first start: database, keys, settings, window cache, AI release history
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
 data/.secret_key
+data/vault.key
+data/settings.json
 data/webview/
-.DS_Store
-*.log
+data/models/versions/
