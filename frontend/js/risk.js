@@ -41,7 +41,11 @@ const STATUS_CLASS = {
   pending_approval: "ng-risk-medium", rolled_back: "ng-risk-high", rejected: "ng-risk-high", failed: "ng-risk-critical",
 };
 
-export function changeStatusBadge(status) {
+/** A fix a user undid on purpose reads "Undone" (grey), not "Rolled back" (which means the check after it failed). */
+export function changeStatusBadge(status, change = null) {
+  if (status === "rolled_back" && change?.self_healing?.undone_by) {
+    return `<span class="ng-badge-risk ng-risk-neutral" title="Undone by ${escapeHtml(change.self_healing.undone_by)}">Undone</span>`;
+  }
   const cls = STATUS_CLASS[status] || "ng-risk-neutral";
   return `<span class="ng-badge-risk ${cls}">${escapeHtml(CHANGE_STATUS_LABELS[status] || status)}</span>`;
 }

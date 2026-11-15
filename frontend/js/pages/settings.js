@@ -2,6 +2,15 @@ import { api, session } from "../api.js";
 import { initShell } from "../layout.js";
 import { confirmDialog, escapeHtml, fillForm, formatDate, readForm, showFormError, toast, withBusy } from "../ui.js";
 
+/** Short names for the permission chips; the full description is in the chip's tooltip. */
+const PERMISSION_SHORT = {
+  "topology.view": "View", "network.edit": "Edit networks", "network.import_export": "Import & export",
+  "discovery.run": "Discover", "analysis.run": "Analyze", "change.propose": "Propose changes",
+  "change.approve": "Approve changes", "change.execute": "Apply fixes (lab)", "change.execute_production": "Apply fixes (real)",
+  "change.auto_fix": "Fix without approval", "credentials.manage": "Device logins", "users.manage": "Users & groups",
+  "device.terminal": "Terminal", "device.terminal_config": "Terminal config (real)",
+};
+
 const $ = (id) => document.getElementById(id);
 const state = { user: null, accounts: [], groups: [], catalogue: [], profiles: [], accountId: null, profileId: null, groupId: null };
 
@@ -31,7 +40,7 @@ async function loadAccounts() {
     return `<tr data-account="${user.id}"><td class="fw-semibold">${escapeHtml(user.username)}</td><td>${escapeHtml(user.role)}</td><td><span class="ng-badge-plain ${user.is_active ? "text-success" : "text-muted-ng"}">${user.is_active ? "Active" : "Disabled"}</span></td><td class="small text-muted-ng">${formatDate(user.created_at)}</td><td class="actions"><button class="btn btn-sm btn-outline-primary" data-account-action="edit">Edit</button>${protectedAccount ? '<span class="small text-muted-ng ms-2">Protected account</span>' : `<button class="btn btn-sm btn-light border" data-account-action="toggle">${user.is_active ? "Disable" : "Enable"}</button><button class="btn btn-sm btn-outline-danger" data-account-action="delete">Delete</button>`}</td></tr>`;
   }).join("")}</tbody></table></div>`;
   const labels = Object.fromEntries(state.catalogue.map((p) => [p.id, p.label]));
-  $("group-list").innerHTML = `<div class="table-responsive"><table class="table ng-table"><thead><tr><th>Group</th><th>Permissions</th><th>Members</th><th></th></tr></thead><tbody>${state.groups.map((group) => `<tr data-group="${group.id}"><td><div class="fw-semibold">${escapeHtml(group.name)}${group.builtin ? ' <span class="ng-badge-plain small">Built-in</span>' : ""}</div><div class="small text-muted-ng">${escapeHtml(group.description || "")}</div></td><td class="small">${group.permissions.map((p) => `<span class="ng-type-badge me-1 mb-1 d-inline-block" title="${escapeHtml(labels[p] || p)}">${escapeHtml(p)}</span>`).join("") || '<span class="text-muted-ng">No permissions</span>'}</td><td>${group.members}</td><td class="actions"><button class="btn btn-sm btn-outline-primary" data-group-action="edit">Edit</button>${group.builtin ? "" : '<button class="btn btn-sm btn-outline-danger" data-group-action="delete">Delete</button>'}</td></tr>`).join("")}</tbody></table></div>`;
+  $("group-list").innerHTML = `<div class="table-responsive"><table class="table ng-table"><thead><tr><th>Group</th><th>Permissions</th><th>Members</th><th></th></tr></thead><tbody>${state.groups.map((group) => `<tr data-group="${group.id}"><td><div class="fw-semibold">${escapeHtml(group.name)}${group.builtin ? ' <span class="ng-badge-plain small">Built-in</span>' : ""}</div><div class="small text-muted-ng">${escapeHtml(group.description || "")}</div></td><td class="small">${group.permissions.map((p) => `<span class="ng-type-badge me-1 mb-1 d-inline-block" title="${escapeHtml(`${labels[p] || p} (${p})`)}">${escapeHtml(PERMISSION_SHORT[p] || p)}</span>`).join("") || '<span class="text-muted-ng">No permissions</span>'}</td><td>${group.members}</td><td class="actions"><button class="btn btn-sm btn-outline-primary" data-group-action="edit">Edit</button>${group.builtin ? "" : '<button class="btn btn-sm btn-outline-danger" data-group-action="delete">Delete</button>'}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 function openAccount(user = null) {
@@ -61,7 +70,7 @@ function openGroup(group = null) {
 
 async function loadProfiles() {
   state.profiles = await api.get("/credential-profiles");
-  $("credential-list").innerHTML = state.profiles.length ? `<div class="table-responsive"><table class="table ng-table"><thead><tr><th>Profile</th><th>Method</th><th>Device Username</th><th>Port</th><th>Priority</th><th>Assigned Devices</th><th></th></tr></thead><tbody>${state.profiles.map((profile) => `<tr data-profile="${profile.id}"><td><div class="fw-semibold">${escapeHtml(profile.name)}</div><div class="small text-muted-ng">${escapeHtml(profile.notes || "")}</div></td><td>${escapeHtml({ ssh: "SSH", snmpv3: "SNMPv3", snmpv2c: "SNMPv2c (read-only)" }[profile.method || "ssh"])}</td><td>${escapeHtml(profile.username)}<div class="small text-muted-ng">${profile.has_password ? "Encrypted secret saved" : "No secret saved"}</div></td><td>${profile.port}</td><td>${profile.priority}</td><td>${profile.used_by ?? 0}</td><td class="actions"><button class="btn btn-sm btn-outline-primary" data-profile-action="edit">Edit</button><button class="btn btn-sm btn-outline-danger" data-profile-action="delete">Delete</button></td></tr>`).join("")}</tbody></table></div>` : '<div class="ng-card-body small text-muted-ng">No credential profiles. Add a profile to reuse it across selected network devices.</div>';
+  $("credential-list").innerHTML = state.profiles.length ? `<div class="table-responsive"><table class="table ng-table"><thead><tr><th>Profile</th><th>Method</th><th>Device Username</th><th>Port</th><th>Priority</th><th>Assigned Devices</th><th></th></tr></thead><tbody>${state.profiles.map((profile) => `<tr data-profile="${profile.id}"><td><div class="fw-semibold">${escapeHtml(profile.name)}</div><div class="small text-muted-ng">${escapeHtml(profile.notes || "")}</div></td><td>${escapeHtml({ ssh: "SSH", snmpv3: "SNMPv3", snmpv2c: "SNMPv2c (read-only)" }[profile.method || "ssh"])}</td><td>${escapeHtml(profile.username)}<div class="small text-muted-ng">${profile.has_password ? "Encrypted secret saved" : "No secret saved"}</div></td><td>${profile.port}</td><td>${profile.priority}</td><td>${profile.used_by ?? 0}</td><td class="actions"><button class="btn btn-sm btn-outline-primary" data-profile-action="edit">Edit</button><button class="btn btn-sm btn-outline-danger" data-profile-action="delete">Delete</button></td></tr>`).join("")}</tbody></table></div>` : '<div class="ng-card-body small text-muted-ng">No device logins yet. Add one so NetGuard can read your devices (read-only SSH or SNMPv3).</div>';
 }
 
 function openCredential(profile = null) {

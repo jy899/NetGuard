@@ -2,7 +2,7 @@
 import { flowLabel, riskBadge, riskClass, severityBadge } from "./risk.js";
 import { escapeHtml, formatDate } from "./ui.js";
 import { advisoriesBlock, diagnosticSections, environmentLabel, expectedActionBadge, flowResultBadge, scopeText } from "./evidence-view.js";
-import { canAutoFix } from "./topology/workflow.js";
+import { canAutoFix, canExecute } from "./topology/workflow.js";
 
 let viewer = null;  // signed-in user of the current render (decides whether Fix Now is offered)
 const CHANGE_STATE = {
@@ -101,7 +101,23 @@ export function aiInsightsBlock(ai) {
     <div class="small text-muted-ng mt-1">${escapeHtml(ai.advisory || "")}</div></div>`;
 }
 
-export function renderHealthPanel(report, skipped = new Set(), network = {}, user = null) {
+/** Fixes applied on this network, newest first. Undo goes newest to oldest, so only the next one has the button. */
+function appliedFixesBlock(fixes, user) {
+  if (!fixes?.length) return "";
+  const mayUndo = canExecute(user) || canAutoFix(user);
+  return `<div class="ng-panel-section" data-health="applied-fixes">
+    <details class="ng-applied" ${fixes.length <= 3 ? "open" : ""}><summary class="ng-panel-title mb-0">Applied fixes <span>${fixes.length}</span></summary>
+      <ul class="ng-conn-list mt-2">${fixes.map((c) => `<li>
+        <span class="min-w-0"><strong>${escapeHtml(c.device_name)}</strong> · ${escapeHtml(c.change_type_label)}
+          <div class="small mono text-muted-ng text-truncate">${escapeHtml(c.current_value ?? "")} → ${escapeHtml(c.proposed_value ?? "")}</div>
+          <div class="small text-muted-ng">${formatDate(c.applied_at || c.updated_at)}${c.applied_by ? ` · ${escapeHtml(c.applied_by)}` : ""}${c.undo_note ? ` · ${escapeHtml(c.undo_note)}` : ""}</div></span>
+        ${c.undo_next && mayUndo ? `<button class="btn btn-sm btn-outline-danger flex-shrink-0" data-action="undo-fix" data-change-id="${c.id}"><i class="bi bi-arrow-counterclockwise me-1"></i>Undo</button>` : ""}
+      </li>`).join("")}</ul>
+      ${fixes.filter((c) => c.can_undo).length > 1 ? '<p class="small text-muted-ng mb-0">Fixes are undone newest first. <strong>Undo Fix</strong> on the toolbar does the same.</p>' : ""}
+    </details></div>`;
+}
+
+export function renderHealthPanel(report, skipped = new Set(), network = {}, user = null, appliedFixes = []) {
   viewer = user;
   const healthy = report.status === "healthy";
   const incomplete = report.status === 'incomplete' || report.analysis_complete === false;
@@ -163,16 +179,19 @@ export function renderHealthPanel(report, skipped = new Set(), network = {}, use
         ${report.elapsed_ms} ms · ${formatDate(report.checked_at)}</div>
       <div class="small mt-2" data-health="summary">Connectivity ${escapeHtml(String(report.status || "").toUpperCase())} · ${(report.advisories || []).length} security advisories</div>
       <div class="small text-muted-ng mt-1" data-health="evidence-scope">${escapeHtml(scopeText(report.evidence_scope || environmentLabel(network)))}</div>
-      <div class="d-flex gap-2 mt-2 flex-wrap">
-        ${fixable.length && network?.is_simulated && canAutoFix(user) ? `<button class="btn btn-sm btn-success" data-action="fix-all-now"><i class="bi bi-lightning-charge-fill me-1"></i>Fix All Now (${fixable.length})</button>` : ""}
-        ${fixable.length ? `<button class="btn btn-sm ${network?.is_simulated && canAutoFix(user) ? "btn-outline-success" : "btn-success"}" data-action="fix-all"><i class="bi bi-send-check me-1"></i>Submit All for Approval (${fixable.length})</button>` : ""}
-        <button class="btn btn-sm btn-outline-primary" data-action="rerun-health"><i class="bi bi-arrow-repeat me-1"></i>Run again</button>
-        <button class="btn btn-sm btn-outline-primary" data-action="save-network-report">Save Report</button>
-        ${report.record_id ? `<a class="btn btn-sm btn-light border" href="/reports?record=${report.record_id}">View Saved Analysis</a>` : ''}
-        <a class="btn btn-sm btn-light border" href="/changes${report.network_id ? `?network=${report.network_id}` : ''}">Validation &amp; Changes</a>
-        ${skipped.size ? `<button class="btn btn-sm btn-link" data-action="unskip-all">Show ${skipped.size} skipped</button>` : ""}
+      ${fixable.length ? `<div class="d-flex gap-2 mt-3 flex-wrap">
+        ${network?.is_simulated && canAutoFix(user) ? `<button class="btn btn-sm btn-success" data-action="fix-all-now"><i class="bi bi-lightning-charge-fill me-1"></i>Fix All Now (${fixable.length})</button>` : ""}
+        <button class="btn btn-sm ${network?.is_simulated && canAutoFix(user) ? "btn-outline-success" : "btn-success"}" data-action="fix-all"><i class="bi bi-send-check me-1"></i>Submit All for Approval (${fixable.length})</button>
+      </div>` : ""}
+      <div class="ng-quick-links mt-2">
+        <button class="btn btn-link" data-action="rerun-health"><i class="bi bi-arrow-repeat"></i>Run again</button>
+        <button class="btn btn-link" data-action="save-network-report"><i class="bi bi-file-earmark-plus"></i>Save Report</button>
+        ${report.record_id ? `<a class="btn btn-link" href="/reports?record=${report.record_id}"><i class="bi bi-clock-history"></i>View Saved Analysis</a>` : ""}
+        <a class="btn btn-link" href="/changes${report.network_id ? `?network=${report.network_id}` : ""}"><i class="bi bi-shield-check"></i>Validation &amp; Changes</a>
+        ${skipped.size ? `<button class="btn btn-link" data-action="unskip-all"><i class="bi bi-eye"></i>Show ${skipped.size} skipped</button>` : ""}
       </div>
     </div>
+    ${appliedFixesBlock(appliedFixes, user)}
     ${aiInsightsBlock(report.ai)}
     ${visible.length ? `<div class="ng-panel-section"><div class="ng-panel-title">Issues <span>${visible.length}</span></div>${issues}</div>` : ""}
     ${(report.advisories || []).length ? `<div class="ng-panel-section" data-health="advisories"><div class="ng-panel-title">Security &amp; hygiene advisories <span>${report.advisories.length}</span></div><p class="small text-muted-ng">Advisories do not change connectivity status.</p>${report.advisories.map((advisory, index) => advisoriesBlock([advisory]) + ((advisory.fixes || []).length ? `<div class="ms-2 mb-3">${advisory.fixes.map((fix, fixIndex) => fixHtml(index, fix, fixIndex, "advisory")).join("")}</div>` : "")).join("")}</div>` : ""}

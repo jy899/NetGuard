@@ -56,7 +56,8 @@ def _self_healing(db, change) -> dict:
                        .order_by(ChangeExecution.id.desc()).limit(1))
     return {"production": not bool(change.device and change.device.is_lab) and not bool(change.network and change.network.is_simulated),
             "confirm_minutes": settings["confirm_minutes"],
-            "confirm_by": (latest.verification or {}).get("confirm_by") if latest is not None and latest.status == "awaiting_confirm" else None}
+            "confirm_by": (latest.verification or {}).get("confirm_by") if latest is not None and latest.status == "awaiting_confirm" else None,
+            "undone_by": (latest.verification or {}).get("undone_by") if latest is not None else None}
 
 
 def list_changes(db: Session, network_id: int | None = None, status: str | None = None) -> list[Change]:

@@ -225,16 +225,21 @@ export function renderDevice(device, analysis) {
     ${smart ? discoverySection(device, discovery) : ''}
     <div class="ng-panel-section">
       <div class="ng-panel-actions">
-        ${device.management_ip || device.access?.console ? `<button class="btn btn-sm btn-dark" data-action="open-cli" data-device-id="${device.id}" title="Interactive terminal (double-click the device)"><i class="bi bi-terminal me-1"></i>Open CLI</button>
-        <button class="btn btn-sm btn-outline-dark" data-action="open-gui" data-device-id="${device.id}" title="Detected web management portals"><i class="bi bi-window me-1"></i>Web GUI</button>` : ''}
-        ${['switch', 'router', 'firewall'].includes(device.device_type) ? `<button class="btn btn-sm btn-outline-dark" data-action="port-clients" data-device-id="${device.id}" title="What is connected to each port"><i class="bi bi-hdd-network me-1"></i>Ports</button>` : ''}
+        ${(() => {
+          const access = [
+            device.management_ip || device.access?.console ? `<button class="btn btn-sm btn-outline-secondary" data-action="open-cli" data-device-id="${device.id}" title="Interactive terminal (double-click the device)"><i class="bi bi-terminal me-1"></i>Open CLI</button>` : "",
+            device.management_ip || device.access?.console ? `<button class="btn btn-sm btn-outline-secondary" data-action="open-gui" data-device-id="${device.id}" title="Detected web management portals"><i class="bi bi-window me-1"></i>Web GUI</button>` : "",
+            ['switch', 'router', 'firewall'].includes(device.device_type) ? `<button class="btn btn-sm btn-outline-secondary" data-action="port-clients" data-device-id="${device.id}" title="What is connected to each port"><i class="bi bi-hdd-network me-1"></i>Ports</button>` : "",
+          ].filter(Boolean);
+          return access.length ? `<div class="ng-access-row full">${access.join("")}</div>` : "";
+        })()}
         ${smart && ['required', 'failed'].includes(discovery.classification?.auth) ? `<button class="btn btn-sm btn-primary full" data-action="discovery-auth" data-device-id="${device.id}"><i class="bi bi-shield-lock me-1"></i>Authenticate this device</button>` : ''}
         <button class="btn btn-sm btn-primary full" data-action="propose-change" ${device.device_type === 'unknown' ? 'disabled title="Identify the device and collect configuration first"' : ''}><i class="bi bi-lightning-charge me-1"></i>Propose Change</button>
         <button class="btn btn-sm btn-outline-primary" data-action="edit-device"><i class="bi bi-pencil me-1"></i>Edit Device</button>
         <button class="btn btn-sm btn-outline-primary" data-action="manage-interfaces"><i class="bi bi-sliders me-1"></i>Configuration</button>
-        <button class="btn btn-sm btn-outline-primary full" data-action="show-connections" data-device-id="${device.id}"><i class="bi bi-ethernet me-1"></i>View Connections</button>
-        <button class="btn btn-sm btn-outline-secondary" data-action="connect-from"><i class="bi bi-share me-1"></i>Connect To…</button>
-        <button class="btn btn-sm btn-outline-danger" data-action="delete-device"><i class="bi bi-trash me-1"></i>Delete Device</button>
+        <button class="btn btn-sm btn-outline-primary" data-action="show-connections" data-device-id="${device.id}"><i class="bi bi-ethernet me-1"></i>Connections</button>
+        <button class="btn btn-sm btn-outline-primary" data-action="connect-from"><i class="bi bi-share me-1"></i>Connect To…</button>
+        <button class="btn btn-sm btn-outline-danger full" data-action="delete-device"><i class="bi bi-trash me-1"></i>Delete Device</button>
       </div>
       ${device.device_type === 'unknown' ? `<p class="small text-muted-ng mt-2 mb-0">Identity is unknown. Use Edit Device to enter known details, or <a href="/networks?environment=real">start automatic discovery</a>.</p>` : ''}
     </div>

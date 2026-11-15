@@ -154,6 +154,17 @@ def test_console_collection_rule_packs_approval_and_verified_lab_change(client, 
         # The restore point for the automatic undo is always taken; a user backup only when asked for.
         assert db.get(DeviceConfig, row.backup_config_id).kind == "pre-change"
         assert "backup" not in (row.verification or {})
+    listed = client.get(f"/api/networks/{nid}/applied-fixes", headers=auth).json()
+    assert [(f["id"], f["undo_next"], f["transport"]) for f in listed] == [(change["id"], True, "console")]
+    # Undo Fix: the lab device gets its restore point back and the fault returns.
+    undone = client.post(f"/api/changes/{change['id']}/undo", headers=auth, json={"transport": "console"})
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["change"]["status"] == "rolled_back" and undone.json()["execution"]["status"] == "rolled_back"
+    assert "switchport access vlan 10" not in lab["sw1"].running().split("interface GigabitEthernet0/1")[1].split("interface")[0]
+    back = client.get(f"/api/networks/{nid}/health-check", headers=auth).json()
+    assert "VLAN001" in {i["rule_id"] for i in back["issues"]}
+    assert client.post(f"/api/changes/{change['id']}/undo", headers=auth, json={"transport": "console"}).status_code == 409
+    assert client.get(f"/api/networks/{nid}/applied-fixes", headers=auth).json() == []
 
 
 def _approved_vlan_change(client, auth, nid, sw1_id, vlan_id):

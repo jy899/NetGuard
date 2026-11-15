@@ -67,6 +67,19 @@ body {
   --bs-btn-hover-border-color: var(--ng-primary);
   --bs-btn-active-bg: var(--ng-primary-hover);
 }
+/* One size scale everywhere: 14px controls, 13px small controls (Bootstrap defaults to 16px). */
+.btn { --bs-btn-font-size: 14px; --bs-btn-padding-y: 6px; --bs-btn-padding-x: 14px; --bs-btn-border-radius: 6px; }
+.btn-sm { --bs-btn-font-size: 13px; --bs-btn-padding-y: 4px; --bs-btn-padding-x: 10px; --bs-btn-border-radius: 6px; }
+.form-control, .form-select { font-size: 14px; border-radius: 6px; }
+.form-control-sm, .form-select-sm { font-size: 13px; }
+.nav { --bs-nav-link-color: var(--ng-primary); --bs-nav-link-hover-color: var(--ng-primary-hover); }
+.nav-link { font-size: 14px; }
+.nav-pills { --bs-nav-pills-link-active-bg: var(--ng-primary); }
+.dropdown-menu { --bs-dropdown-font-size: 14px; }
+.dropdown-item i { color: var(--ng-text-muted); }
+.btn .bi, .dropdown-item .bi { vertical-align: -0.125em; }
+.ng-empty .btn i { font-size: inherit; color: inherit; display: inline; margin: 0 4px 0 0; }
+
 .form-label { font-weight: 600; font-size: 12.5px; color: #3a4556; margin-bottom: 4px; }
 .form-text { font-size: 12px; }
 .mono { font-family: var(--ng-mono); font-size: 12.5px; }
@@ -279,7 +292,7 @@ body.ng-topology-page .ng-content { padding: 0; display: flex; min-height: 0; }
 body.ng-topology-page .ng-main { height: 100vh; }
 
 .ng-workspace { display: flex; flex: 1; min-height: 0; min-width: 0; width: 100%; }
-.ng-canvas-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--ng-border); }
+.ng-canvas-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--ng-border); container-type: inline-size; container-name: canvas; }
 .ng-panel-col { flex: 0 0 clamp(320px, 30%, 420px); background: var(--ng-surface); overflow-y: auto; }
 @media (min-width: 1024px) {
   body.ng-topology-page { overflow: hidden; }
@@ -297,9 +310,11 @@ body.ng-topology-page .ng-main { height: 100vh; }
 .ng-save-state.dirty { color: #a35a12; font-weight: 600; }
 
 .ng-palette {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; min-height: 47px;
   padding: 8px 14px; background: var(--ng-surface-alt); border-bottom: 1px solid var(--ng-border);
 }
+.ng-palette .ng-environment-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#palette { flex: 0 0 auto; }
 .ng-palette-label { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ng-text-muted); margin-right: 4px; }
 .ng-palette-item {
   display: inline-flex; align-items: center; gap: 6px;
@@ -633,3 +648,43 @@ body.ng-lacks-credentials-manage #btn-add-credential, body.ng-lacks-credentials-
   background: transparent; color: var(--ng-text-muted, #667085); display: flex; align-items: center; justify-content: center; font-size: 13px; }
 .ng-picker-remove:hover, .ng-picker-remove:focus-visible { background: #fdecec; color: #c62f2f; }
 body.ng-lacks-network-edit .ng-picker-remove { display: none; }
+/* Applied fixes (Analyze panel) */
+.ng-applied > summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; }
+.ng-applied > summary::-webkit-details-marker { display: none; }
+.ng-applied > summary::after { content: "\F282"; font-family: "bootstrap-icons"; font-size: 11px; transition: transform .15s; }
+.ng-applied[open] > summary::after { transform: rotate(180deg); }
+
+/* ---------- Undo Fix (toolbar) and Discard layout ---------- */
+.ng-undo-btn { display: inline-flex; align-items: center; }
+.ng-undo-btn:disabled { color: #9aa5b5; border-color: var(--ng-border); background: var(--ng-surface); opacity: 1; }
+.ng-undo-count { margin-left: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: 11px; line-height: 18px; text-align: center; background: var(--ng-risk-critical); color: #fff; }
+.ng-undo-btn:hover .ng-undo-count { background: #fff; color: var(--ng-risk-critical); }
+.ng-discard { padding: 0 4px; font-size: 12.5px; text-decoration: none; color: var(--ng-risk-critical); }
+.ng-discard:hover { text-decoration: underline; color: var(--ng-risk-critical); }
+.ng-undo-summary { border: 1px solid var(--ng-border); border-radius: var(--ng-radius); background: var(--ng-surface-alt); padding: 8px 10px; }
+.ng-conn-list li > .min-w-0 { min-width: 0; }
+.ng-quick-links { display: flex; flex-wrap: wrap; gap: 2px 16px; }
+.ng-quick-links .btn-link { --bs-btn-padding-x: 0; --bs-btn-padding-y: 2px; --bs-btn-font-size: 12.5px; display: inline-flex; align-items: center; gap: 5px; text-decoration: none; }
+.ng-quick-links .btn-link:hover { text-decoration: underline; }
+.ng-undo-values { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+.ng-undo-values > span:nth-child(odd) { color: var(--ng-text-muted); }
+.ng-undo-values .mono { word-break: break-word; }
+
+/* Narrower map column: the palette gets more compact step by step so Save Topology stays on the same row. */
+@container canvas (max-width: 920px) {
+  .ng-palette { gap: 5px; }
+  .ng-palette-label { display: none; }
+  #palette { gap: 4px !important; }
+  .ng-palette-item { padding: 3px 7px 3px 4px; gap: 4px; font-size: 12px; }
+}
+@container canvas (max-width: 780px) {
+  .ng-palette-item .lbl { display: none; }
+  .ng-palette-item { padding: 3px 5px; }
+}
+@container canvas (max-width: 600px) {
+  .ng-environment-badge { display: none; }
+}
+@container canvas (max-width: 480px) {
+  .ng-save-state { display: none; }
+}
+.ng-access-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 8px; }

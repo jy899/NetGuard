@@ -75,3 +75,37 @@ def test_fix_without_backup_stores_none(client, auth):
     result = _fix_now(client, auth, fix)
     assert "backup" not in result["execution"]["verification"]
     assert client.get(f"/api/devices/{fix['device_id']}/backups", headers=auth).json() == []
+
+
+def _model_state(client, auth, network_id):
+    topo = client.get(f"/api/networks/{network_id}/topology", headers=auth).json()
+    strip = lambda d: {k: v for k, v in d.items() if k not in ("x_position", "y_position", "updated_at", "created_at")}
+    return sorted((strip(d) for d in topo["devices"]), key=lambda d: d["id"]), topo["links"]
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_undo_puts_the_practice_network_back_exactly(client, auth, scenario):
+    network = client.post("/api/networks/samples", headers=auth, json={"scenario": scenario, "name": f"U {scenario}"}).json()["network"]
+    original = _model_state(client, auth, network["id"])
+    issues_before = {i["rule_id"] for i in _health(client, auth, network["id"])["issues"]}
+    applied = []
+    for _ in range(4):
+        fixable = [i for i in _health(client, auth, network["id"])["issues"] if i.get("fixes")]
+        if not fixable:
+            break
+        result = _fix_now(client, auth, fixable[0]["fixes"][0])
+        assert result["change"]["status"] == "applied"
+        applied.append(result["change"]["id"])
+    if len(applied) > 1:  # newest first: the oldest cannot be undone while a newer fix is applied
+        assert client.post(f"/api/changes/{applied[0]}/undo", headers=auth).status_code == 409
+    for change_id in reversed(applied):
+        listed = client.get(f"/api/networks/{network['id']}/applied-fixes", headers=auth).json()
+        assert [f["id"] for f in listed] == list(reversed(applied[:applied.index(change_id) + 1]))
+        assert [f["id"] for f in listed if f["undo_next"]] == [change_id]  # what the toolbar Undo Fix takes
+        assert all(f["can_undo"] and f["applied_at"] for f in listed)
+        undone = client.post(f"/api/changes/{change_id}/undo", headers=auth)
+        assert undone.status_code == 200, undone.text
+        assert undone.json()["change"]["status"] == "rolled_back"
+    assert client.get(f"/api/networks/{network['id']}/applied-fixes", headers=auth).json() == []
+    assert _model_state(client, auth, network["id"]) == original
+    assert {i["rule_id"] for i in _health(client, auth, network["id"])["issues"]} == issues_before

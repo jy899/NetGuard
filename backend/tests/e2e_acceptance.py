@@ -834,6 +834,35 @@ def run(headed: bool, artifact_dir: Path | None = None, browser_channel: str | N
                     page.click("[data-export=pdf]")
                 assert info.value.path().read_bytes().startswith(b"%PDF")
 
+            @step("Undo Fix on the toolbar: confirm, and the practice network is back as before the fix")
+            def toolbar_undo_fix():
+                created = page.evaluate("""async () => {
+                    const r = await fetch('/api/networks/samples', {method: 'POST', headers: {'Content-Type': 'application/json',
+                      Authorization: 'Bearer ' + localStorage.getItem('netguard.token')}, body: JSON.stringify({scenario: 'interface', name: 'Undo practice'})});
+                    return (await r.json()).network_id; }""")
+                page.goto(f"{BASE}/topology?network={created}")
+                expect(page.locator("#btn-undo-fix")).to_be_disabled()  # nothing applied yet
+                page.click("#btn-health")
+                first_issue = page.locator("[data-issue-card]").first
+                expect(first_issue).to_be_visible()
+                issues_before = page.locator("[data-issue-card]").count()
+                page.locator("[data-action=auto-fix]").first.click()
+                page.click("#execute-submit")
+                expect(page.locator("#execute-result")).to_contain_text("Fixed and checked", timeout=30000)
+                page.click("#execute-close")
+                expect(page.locator("#btn-undo-fix")).to_be_enabled()
+                expect(page.locator("[data-health=applied-fixes]")).to_contain_text("Applied fixes")
+                page.click("#btn-undo-fix")
+                expect(page.locator(".modal.show")).to_contain_text("Undo this fix?")
+                expect(page.locator(".modal.show")).to_contain_text("After undo")
+                page.click(".modal.show [data-ng-confirm]")
+                expect(page.locator(".ng-toast, .toast").last).to_contain_text("Fix undone")
+                expect(page.locator("#btn-undo-fix")).to_be_disabled()
+                expect(page.locator("[data-health=applied-fixes]")).to_have_count(0)
+                expect(page.locator("[data-issue-card]")).to_have_count(issues_before)
+                page.goto(f"{BASE}/changes?network={created}")
+                expect(page.locator("#change-list")).to_contain_text("Undone")
+
             @step("Six navigation items and a minimal login interface; no simulation wording remains")
             def professional_shell():
                 expect(page.locator(".ng-nav a")).to_have_count(6)
@@ -901,7 +930,7 @@ def run(headed: bool, artifact_dir: Path | None = None, browser_channel: str | N
                 page.check("#perm-topology\\.view")
                 page.click("#group-submit")
                 expect(page.locator("#group-modal")).to_be_hidden()
-                expect(page.locator("#group-list tr", has_text="Auditors")).to_contain_text("topology.view")
+                expect(page.locator("#group-list tr", has_text="Auditors")).to_contain_text("View")
                 page.click("#btn-add-account")
                 page.fill("#account-username", "reviewer")
                 page.fill("#account-password", "ReviewerPass123")
@@ -988,6 +1017,7 @@ def run(headed: bool, artifact_dir: Path | None = None, browser_channel: str | N
             lab_network = lab_workflow()
             discovery_scan()
             report_exports(lab_network)
+            toolbar_undo_fix()
             professional_shell()
             settings_profiles()
             settings_accounts_sessions()

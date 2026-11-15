@@ -35,8 +35,12 @@ export function workflowButtons(a, change, user) {
       + `<button class="btn btn-sm btn-light border full" data-action="show-executions">Execution log</button>`;
   }
   const log = `<button class="btn btn-sm btn-light border full" data-action="show-executions">Execution log</button>`;
-  if (status === "applied") return note(`<i class="bi bi-check2-all me-1"></i>${change?.simulated ? "Fixed in the practice network and checked" : change?.lab_device ? "Applied to the laboratory device and checked" : "Applied"}`, "text-success fw-semibold") + log;
-  if (status === "rolled_back") return note('<i class="bi bi-arrow-counterclockwise me-1"></i>The check after the change failed, so the fix was undone.', "text-warning fw-semibold") + log;
+  const undo = canExecute(user) || canAutoFix(user)
+    ? `<button class="btn btn-sm btn-outline-danger full" data-action="undo-change"><i class="bi bi-arrow-counterclockwise me-1"></i>Undo Fix</button>` : "";
+  if (status === "applied") return note(`<i class="bi bi-check2-all me-1"></i>${change?.simulated ? "Fixed in the practice network and checked" : change?.lab_device ? "Applied to the laboratory device and checked" : "Applied"}`, "text-success fw-semibold") + undo + log;
+  if (status === "rolled_back") return note(`<i class="bi bi-arrow-counterclockwise me-1"></i>${change?.self_healing?.undone_by
+    ? `Fix undone by ${escapeHtml(change.self_healing.undone_by)}. The network is back as it was before the fix.`
+    : "The check after the change failed, so the fix was undone."}`, "text-warning fw-semibold") + log;
   if (status === "failed") return note('<i class="bi bi-exclamation-octagon me-1"></i>The undo could not be verified. Check the device; a backup, if you made one, is in the device panel.', "text-danger fw-semibold") + log;
   if (status === "pending_approval") {
     if (canApprove(user) && approval.submitted_by !== user.username) return `<button class="btn btn-sm btn-success" data-action="approve-change"><i class="bi bi-check2-circle me-1"></i>Approve</button><button class="btn btn-sm btn-outline-danger" data-action="reject-change"><i class="bi bi-x-circle me-1"></i>Reject</button>`;
@@ -130,7 +134,7 @@ export function createWorkflow({ onChanged }) {
   let executeState = null;
   const STATUS_TEXT = { applied: "Fixed and checked", awaiting_confirm: "Checked, waiting for your confirmation", rolled_back: "Undone: the check failed", rollback_failed: "Undo not verified", failed: "Failed" };
   const renderExecution = (ex) => `<div class="border rounded p-3 mb-2 ${ex.status === "applied" ? "border-success" : "border-warning"}">
-      <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap mb-1"><div class="fw-semibold">${escapeHtml(STATUS_TEXT[ex.status] || ex.status)} · ${escapeHtml(ex.device_name)}
+      <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap mb-1"><div class="fw-semibold">${escapeHtml(ex.verification?.undone_by ? `Undone by ${ex.verification.undone_by}` : STATUS_TEXT[ex.status] || ex.status)} · ${escapeHtml(ex.device_name)}
         <span class="text-muted-ng fw-normal small">${ex.transport === "simulated" ? "practice network (model only)" : `via ${escapeHtml(ex.transport)}`}</span></div>
         ${ex.verification?.backup ? `<button type="button" class="btn btn-sm btn-light border" data-download-backup="${ex.verification.backup.id}"><i class="bi bi-download me-1"></i>Download backup</button>` : ""}</div>
       ${(ex.verification?.revealed || []).length ? `<div class="small text-primary mb-1"><i class="bi bi-info-circle me-1"></i>Problems that were hidden behind this fault are now visible. Press Analyze to see them.</div>` : ""}
@@ -146,13 +150,14 @@ export function createWorkflow({ onChanged }) {
     try {
       const body = { confirm: true, backup: execute.querySelector("#execute-backup").checked,
         transport: execute.querySelector("#execute-transport").value, ...credentials(execute, "ex") };
-      const result = await api.post(`/changes/${executeState.change.id}/execute`, body);
+      const undoing = executeState.mode === "undo";
+      const result = await api.post(`/changes/${executeState.change.id}/${undoing ? "undo" : "execute"}`, body);
       execute.querySelector("#execute-setup").classList.add("d-none");
       execute.querySelector("#execute-result").innerHTML = renderExecution(result.execution);
       execute.querySelector("#execute-submit").classList.add("d-none");
       execute.querySelector("#execute-close").textContent = "Close";
       const done = result.execution.status;
-      toast(done === "applied" ? "Fixed and checked." : done === "awaiting_confirm" ? "Applied and checked. Confirm it before the timer ends." : "Fix undone: the check after the change failed.", done === "rolled_back" || done === "failed" ? "warning" : "success", 6000);
+      toast(undoing ? "Fix undone. The device is back to its configuration before the fix." : done === "applied" ? "Fixed and checked." : done === "awaiting_confirm" ? "Applied and checked. Confirm it before the timer ends." : "Fix undone: the check after the change failed.", !undoing && (done === "rolled_back" || done === "failed") ? "warning" : "success", 6000);
       await onChanged(result.change, { executed: true });
     } catch (err) { error.textContent = err.message; error.classList.remove("d-none"); }
   }));
@@ -215,15 +220,23 @@ export function createWorkflow({ onChanged }) {
         } catch (err) { toast(err.message, "error"); }
       });
     },
-    async execute(change, assessment) {
-      executeState = { change, deviceName: assessment.change.device };
+    /** Undo an applied fix on a lab or real device: connect and put its restore point back. */
+    async undo(change, assessment) {
+      await this.execute(change, assessment, "undo");
+    },
+
+    async execute(change, assessment, mode = "apply") {
+      executeState = { change, deviceName: assessment.change.device, mode };
       const simulated = Boolean(change?.simulated);
       const production = !simulated && change && change.lab_device === false;
       const where = simulated ? "Practice network: only NetGuard's model changes, no device is contacted."
         : production ? "Real-network device" : "Laboratory device";
-      execute.querySelector("#execute-title").textContent = change && change.status !== "approved" ? "Fix now" : "Apply approved fix";
+      const undoing = mode === "undo";
+      execute.querySelector("#execute-title").textContent = undoing ? "Undo fix" : change && change.status !== "approved" ? "Fix now" : "Apply approved fix";
       execute.querySelector("#execute-where").textContent = where;
-      const steps = simulated
+      const steps = undoing
+        ? ["Connect to the device.", "Put back the configuration it had before the fix (its restore point).", "Read it again and update NetGuard's model.", "The problem this fix solved will show again in Analyze."]
+        : simulated
         ? ["Check the fix again on a copy of the network.", "Apply it to the practice network.", "Check the result: the fault is gone, nothing new is broken.", "If the check fails, undo it automatically."]
         : production
           ? ["Check the fix again and against the risk limit.", "Connect, note what is reachable and arm the device revert timer.", "Send the commands, then check the result and reachability.", "Keep it only if you confirm in time; otherwise NetGuard undoes it."]
@@ -233,6 +246,7 @@ export function createWorkflow({ onChanged }) {
       execute.querySelector("#execute-transport").value = production ? "ssh" : "console";
       execute.querySelector("#execute-connection-hint").textContent = production ? "Use a login that may change the configuration." : "Lab consoles normally need no login.";
       execute.querySelector("#execute-backup").checked = false;
+      execute.querySelector("#execute-backup").closest(".ng-option-check").classList.toggle("d-none", undoing);
       execute.querySelector("#execute-setup").classList.remove("d-none");
       execute.querySelector("#execute-error").classList.add("d-none");
       execute.querySelector("#execute-result").innerHTML = "";
@@ -244,8 +258,11 @@ export function createWorkflow({ onChanged }) {
         <div class="small mt-1">${escapeHtml(a.recommendation_label || "")}${a.risk_level ? ` · ${escapeHtml(a.risk_level)} risk ${a.total_risk_score}/100` : ""}</div>`;
       const commands = (a.change.commands || []).filter((c) => !c.startsWith("!") && !c.startsWith("#"));
       execute.querySelector("#execute-commands").textContent = commands.join("\n");
-      execute.querySelector("#execute-commands-box").classList.toggle("d-none", !commands.length);
+      execute.querySelector("#execute-commands-box").classList.toggle("d-none", !commands.length || undoing);
       execute.querySelector("#execute-commands-box").open = !simulated;
+      execute.querySelector("#execute-submit").innerHTML = undoing ? '<i class="bi bi-arrow-counterclockwise me-1"></i>Undo Fix' : '<i class="bi bi-play-circle me-1"></i>Apply Fix';
+      execute.querySelector("#execute-submit").classList.toggle("btn-danger", undoing);
+      execute.querySelector("#execute-submit").classList.toggle("btn-success", !undoing);
       if (!simulated) await fillProfiles(execute.querySelector("#ex-profile"));
       executeModal.show();
     },

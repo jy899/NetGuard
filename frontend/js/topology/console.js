@@ -5,7 +5,7 @@
 //  * Web GUI: the device's detected management portals (any port, vendor fingerprint, certificate), opened in a
 //    NetGuard child window (desktop app) or a browser tab, plus on-demand port scans to find more.
 import { api } from "../api.js";
-import { escapeHtml, toast } from "../ui.js";
+import { escapeHtml, formatDate, toast } from "../ui.js";
 
 let windows = 0;
 let z = 1080;
@@ -171,7 +171,7 @@ export async function openPortals(device) {
     <div data-portal-list>${portalRows(data, device)}</div>
     ${data.lab_console ? `<p class="small">Laboratory console: <span class="mono">${escapeHtml(data.lab_console)}</span> (use Open CLI).</p>` : ""}
     <div class="border rounded p-2 small"><div class="fw-semibold mb-1">Find more management interfaces</div>
-      <p class="text-muted-ng mb-2">A read-only TCP connect scan of ${escapeHtml(data.ip || "the device")}; every open port is checked for HTTP and HTTPS (FortiGate 10443, UniFi 8443, appliances on 8080 and so on).${data.last_scan ? ` Last scan: ${escapeHtml(data.last_scan.range)} at ${escapeHtml(data.last_scan.at)}, open ports ${escapeHtml((data.last_scan.open_ports || []).join(", ") || "none")}.` : ""}</p>
+      <p class="text-muted-ng mb-2">A read-only TCP connect scan of ${escapeHtml(data.ip || "the device")}; every open port is checked for HTTP and HTTPS (FortiGate 10443, UniFi 8443, appliances on 8080 and so on).${data.last_scan ? ` Last scan: ${escapeHtml(data.last_scan.range)} at ${escapeHtml(formatDate(data.last_scan.at))}, open ports ${escapeHtml((data.last_scan.open_ports || []).join(", ") || "none")}.` : ""}</p>
       <div class="d-flex gap-2 flex-wrap"><button class="btn btn-sm btn-outline-primary" data-portal-scan="common">Common ports</button><button class="btn btn-sm btn-outline-primary" data-portal-scan="well-known">1–1024 and well-known</button><button class="btn btn-sm btn-outline-secondary" data-portal-scan="all">All 65,535 ports</button></div>
       <div class="progress mt-2 d-none" style="height:6px" data-portal-progress><div class="progress-bar" style="width:0%"></div></div><div class="small text-muted-ng mt-1" data-portal-status></div></div>`;
   const { el } = modal("portal-modal", `Web GUI · ${escapeHtml(device.name)}`, body);

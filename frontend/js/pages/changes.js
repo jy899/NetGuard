@@ -38,7 +38,7 @@ function render() {
         <span class="d-flex gap-1 flex-wrap">${counts}</span>
         <a class="btn btn-sm btn-light border ms-auto" href="/topology?network=${g.id}"><i class="bi bi-box-arrow-up-right me-1"></i>Open map</a></summary>
       <div class="table-responsive"><table class="table ng-table ng-group-table">
-        <colgroup><col style="width:24%"><col style="width:25%"><col style="width:13%"><col style="width:15%"><col style="width:12%"><col style="width:11%"></colgroup>
+        <colgroup><col style="width:22%"><col style="width:22%"><col style="width:13%"><col style="width:12%"><col style="width:13%"><col style="width:18%"></colgroup>
         <thead><tr><th>Change</th><th>Current → Proposed</th><th>Risk</th><th>Status</th><th>Updated</th><th></th></tr></thead>
         <tbody>${g.items.map(row).join("")}</tbody></table></div></details>`;
   }).join("");
@@ -52,7 +52,7 @@ function row(c) {
       <div class="small text-muted-ng">${escapeHtml(CATEGORY_LABELS[c.category] || c.category)}</div></td>
     <td class="mono small" style="max-width:300px"><span class="text-muted-ng">${escapeHtml(c.current_value)}</span><br>→ ${escapeHtml(c.proposed_value)}</td>
     <td>${latest ? `${riskBadge(latest.risk_level)} <span class="small text-muted-ng">${latest.total_risk_score}/100</span><div class="mt-1">${recommendationBadge(latest.recommendation, latest.risk_level)}</div>` : '<span class="small text-muted-ng">Not checked</span>'}</td>
-    <td>${changeStatusBadge(c.status)}</td>
+    <td>${changeStatusBadge(c.status, c)}</td>
     <td class="text-muted-ng small">${formatDate(c.updated_at)}</td>
     <td class="actions">
       <a class="btn btn-sm btn-primary" href="/topology?network=${c.network_id}&change=${c.id}" data-action="open">${c.status === "approved" ? "Apply" : "Open"}</a>

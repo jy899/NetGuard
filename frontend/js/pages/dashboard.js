@@ -32,14 +32,14 @@ function renderStats(summary) {
       value: summary.detected_issues ?? 0,
       icon: "bi-exclamation-triangle",
       tone: "warn",
-      note: "Latest network analysis results",
+      note: "From the latest analyses",
     }),
     statCard({
       label: "Changes",
       value: summary.total_changes ?? 0,
       icon: "bi-shield-check",
       tone: "neutral",
-      note: `${summary.awaiting_approval} awaiting approval · ${summary.approved_changes} to apply · ${summary.high_critical_changes} high risk`,
+      note: `${summary.awaiting_approval} to approve · ${summary.approved_changes} to apply${summary.high_critical_changes ? ` · ${summary.high_critical_changes} high risk` : ""}`,
     }),
   ].join("");
 }
@@ -53,7 +53,7 @@ function renderActivity(items) {
   container.innerHTML = `<ul class="ng-activity-list">${items.slice(0, 6).map((item) => `<li>
     <span class="ng-activity-icon"><i class="bi ${item.kind === "scan" || item.kind === "discovery" ? "bi-radar" : item.kind === "report" ? "bi-file-earmark-text" : item.kind === "change" ? "bi-shield-check" : "bi-diagram-3"}"></i></span>
     <div class="flex-grow-1 min-w-0"><a class="fw-semibold text-decoration-none" href="/reports?${item.assessment_id ? `assessment=${item.assessment_id}` : `history=${item.id}`}">${escapeHtml(item.title)}</a>
-      <div class="small text-muted-ng">${escapeHtml(item.network_name || "")} · ${escapeHtml(activitySummary(item.summary))}</div></div>
+      <div class="small text-muted-ng">${escapeHtml([item.network_name, activitySummary(item.summary)].filter(Boolean).join(" · "))}</div></div>
     <span class="small text-muted-ng">${formatDate(item.created_at)}</span></li>`).join("")}</ul>`;
 }
 

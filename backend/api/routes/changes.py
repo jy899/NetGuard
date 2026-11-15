@@ -145,6 +145,22 @@ def rollback_change(change_id: int, db: DbSession, user: CurrentUser, body: Exec
     return {"execution": remediation_service.execution_out(execution), "change": change_service.to_out(db, change)}
 
 
+@router.get("/networks/{network_id}/applied-fixes")
+def applied_fixes(network_id: int, db: DbSession, _: CurrentUser) -> list[dict]:
+    """Fixes still applied on the network, newest first; undo_next marks the one Undo takes next."""
+    from backend.services import network_service
+    network_service.get_network(db, network_id)
+    return remediation_service.applied_fixes(db, network_id)
+
+
+@router.post("/changes/{change_id}/undo")
+def undo_change(change_id: int, db: DbSession, user: CurrentUser, body: ExecuteIn | None = Body(default=None)) -> dict:
+    """Undo an applied fix (practice network: in the model; lab or real device: from its restore point)."""
+    change = change_service.get_change(db, change_id)
+    execution = remediation_service.undo(db, user, change, body.model_dump() if body else {})
+    return {"execution": remediation_service.execution_out(execution), "change": change_service.to_out(db, change)}
+
+
 @router.get("/settings/self-healing")
 def get_self_healing(user: CurrentUser) -> dict:
     return {**remediation_service.self_healing_settings(), "direct_for_me": remediation_service.admin_direct(user)}

@@ -263,7 +263,7 @@ def scan_portals(device_id: int, payload: PortScanIn, db: DbSession, user: Curre
                 if net is not None:
                     meta = dict(net.metadata_json or {})
                     scans = dict(meta.get("portal_scans") or {})
-                    scans[str(device_pk)] = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "range": payload.range,
+                    scans[str(device_pk)] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "range": payload.range,
                                              "open_ports": job["open_ports"], "portals": job["portals"], "by": username}
                     meta["portal_scans"] = scans
                     net.metadata_json = meta

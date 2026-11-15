@@ -47,7 +47,7 @@ PERMISSIONS: dict[str, str] = {
     USERS: "Manage user accounts and user groups",
     TERMINAL: "Open device CLI terminals (SSH, Telnet, lab console) and web management portals",
     TERMINAL_CONFIG: "Enter configuration commands in a terminal on a production (real-network) device",
-    PRODUCTION: "Apply approved changes to real-network devices (backup, check and automatic undo)",
+    PRODUCTION: "Apply approved changes to real-network devices (check and automatic undo)",
     AUTO_FIX: "Auto-Fix: apply validated fixes in one click without waiting for approval (lab and real network)",
 }
 
@@ -102,7 +102,7 @@ _WRITE_RULES: list[tuple[re.Pattern, str | None]] = [(re.compile(p), perm) for p
     (r"^/api/(accounts|groups)(/|$)", USERS),
     (r"^/api/credential-profiles(/|$)", CREDENTIALS),
     (r"^/api/changes/\d+/(approve|reject)$", APPROVE),
-    (r"^/api/changes/\d+/(execute|apply|confirm|rollback)$", EXECUTE),
+    (r"^/api/changes/\d+/(execute|apply|confirm|rollback|undo)$", EXECUTE),
     (r"^/api/devices/\d+/(terminal|portals/scan|portals/open)$", TERMINAL),
     (r"^/api/terminal/", TERMINAL),
     (r"^/api/settings/self-healing$", USERS),

@@ -39,18 +39,19 @@
               <button class="btn btn-sm btn-outline-primary d-none" id="btn-collect" data-requires-network data-requires-modify
                 title="Read running configurations (show commands only)"><i class="bi bi-download me-1"></i>Collect Configs</button>
               <button class="btn btn-sm btn-outline-primary" id="btn-report" data-requires-network title="Save a report"><i class="bi bi-file-earmark-text me-1"></i>Report</button>
+              <button class="btn btn-sm btn-outline-danger ng-undo-btn d-none" id="btn-undo-fix" data-busy-label="Undoing…" disabled title="No fix to undo on this network"><i class="bi bi-arrow-counterclockwise me-1"></i>Undo Fix<span class="ng-undo-count d-none" id="undo-count"></span></button>
               <span class="divider"></span>
-              <button class="btn btn-sm btn-light border" id="btn-layout" data-requires-network title="Auto-arrange devices"><i class="bi bi-diagram-2"></i></button>
-              <button class="btn btn-sm btn-light border" id="btn-reload" data-requires-network title="Reload the last saved topology (asks first if you have unsaved changes)"><i class="bi bi-arrow-clockwise"></i></button>
+              <button class="btn btn-sm btn-light border" id="btn-layout" data-requires-network title="Auto-arrange devices" aria-label="Auto-arrange devices"><i class="bi bi-magic"></i></button>
               <button class="btn btn-sm btn-light border" id="btn-details-toggle" aria-controls="side-panel" aria-expanded="true" title="Hide details panel"><i class="bi bi-layout-sidebar-reverse" aria-hidden="true"></i><span class="visually-hidden">Hide Details</span></button>
             </div>
             <div class="ng-palette">
               <span class="ng-type-badge ng-environment-badge" id="environment-badge">Manual model</span>
               <span class="ng-palette-label">Add</span>
-              <div class="d-flex flex-wrap gap-2" id="palette"></div>
-              <div class="ms-auto d-flex align-items-center gap-2">
+              <div class="d-flex gap-2" id="palette"></div>
+              <div class="ms-auto d-flex align-items-center gap-2 flex-shrink-0">
                 <span class="ng-save-state" id="save-state">Saved</span>
-                <button class="btn btn-sm btn-primary" id="btn-save" data-requires-network><i class="bi bi-save me-1"></i>Save Topology</button>
+                <button class="btn btn-sm btn-link ng-discard d-none" id="btn-discard-layout" title="Put devices back where they were at the last save">Discard</button>
+                <button class="btn btn-sm btn-primary" id="btn-save" data-requires-network title="Save Topology: keep the device positions"><i class="bi bi-save me-1"></i>Save</button>
               </div>
             </div>
             <div class="ng-canvas-wrap">

@@ -10,7 +10,7 @@ import { RISK_COLORS } from "../risk.js";
 import { confirmDialog, escapeHtml, formatDate, toast, withBusy } from "../ui.js";
 import { createChangeForm } from "../topology/change-form.js";
 import { createDialogs } from "../topology/dialogs.js";
-import { createWorkflow } from "../topology/workflow.js";
+import { canAutoFix, canExecute, createWorkflow } from "../topology/workflow.js";
 import {
   applyHighlight,
   autoArrange,
@@ -41,6 +41,8 @@ const ui = {
   connectBannerText: document.getElementById("connect-banner-text"),
   canvasEmpty: document.getElementById("canvas-empty"),
   legend: document.getElementById("analysis-legend"),
+  undoBtn: document.getElementById("btn-undo-fix"),
+  discardBtn: document.getElementById("btn-discard-layout"),
 };
 
 const state = {
@@ -57,6 +59,7 @@ const state = {
   showConnections: false,
   connectionDeviceId: null,
   skipped: new Set(), // issue keys the engineer chose to skip (this session)
+  appliedFixes: [], // fixes applied on the open network, newest first
   workflow: null,
   user: null,
 };
@@ -82,7 +85,9 @@ async function fitWorkspaceAfterLayout() {
 
 function updateDiscoveryStatus() {
   const network = store.network;
-  document.getElementById("environment-badge").textContent = environmentLabel(network || {});
+  const badge = document.getElementById("environment-badge");
+  badge.textContent = environmentLabel(network || {});
+  badge.title = badge.textContent;
   const button = document.getElementById("btn-device-access");
   const banner = document.getElementById("discovery-status");
   const discovered = isDiscoveredNetwork(network);
@@ -219,6 +224,7 @@ function setDirty(dirty) {
   state.dirty = dirty;
   ui.saveState.textContent = dirty ? "Unsaved layout" : "Saved";
   ui.saveState.classList.toggle("dirty", dirty);
+  ui.discardBtn?.classList.toggle("d-none", !dirty);
 }
 
 function setNetworkControlsEnabled(enabled) {
@@ -258,7 +264,7 @@ function renderPanel() {
     return;
   }
   if (state.health && state.showHealth) {
-    ui.panel.innerHTML = renderHealthPanel(state.health, state.skipped, store.network, state.user);
+    ui.panel.innerHTML = renderHealthPanel(state.health, state.skipped, store.network, state.user, state.appliedFixes);
     return;
   }
   if (state.showConnections) {
@@ -418,6 +424,7 @@ async function runHealthCheck(button) {
       state.analysis = null;
       const record = await api.post(`/networks/${store.network.id}/analyze`);
       state.health = { ...record.snapshot.analysis, record_id: record.id, network_id: store.network.id };
+      await loadAppliedFixes();
       showHealth();
     } catch (error) {
       toast(error.message, "error");
@@ -501,8 +508,113 @@ async function refreshIssuesQuietly() {
   try {
     const report = await api.get(`/networks/${store.network.id}/health-check`);
     state.health = { ...report, record_id: state.health.record_id, network_id: store.network.id };
-    if (state.showHealth) renderPanel();
+    await loadAppliedFixes();
+    if (state.showHealth) {
+      highlightHealth(state.health); // the map shows the current problems, not the ones before the fix or undo
+      renderPanel();
+    }
   } catch { /* the next Analyze run refreshes it */ }
+}
+
+/** Fixes still applied on the open network, newest first. undo_next marks the one Undo takes next. */
+async function loadAppliedFixes() {
+  if (!store.network) {
+    state.appliedFixes = [];
+  } else {
+    try {
+      state.appliedFixes = await api.get(`/networks/${store.network.id}/applied-fixes`);
+    } catch {
+      state.appliedFixes = [];
+    }
+  }
+  updateUndoButton();
+}
+
+function nextUndo() {
+  return state.appliedFixes.find((fix) => fix.undo_next) || null;
+}
+
+/** Toolbar Undo Fix: shown to users who may apply fixes, enabled when a fix on this network can be undone. */
+function updateUndoButton() {
+  if (!ui.undoBtn) return;
+  const allowed = Boolean(store.network) && (canExecute(state.user) || canAutoFix(state.user));
+  ui.undoBtn.classList.toggle("d-none", !allowed);
+  const next = nextUndo();
+  const count = state.appliedFixes.filter((fix) => fix.can_undo).length;
+  ui.undoBtn.disabled = !next;
+  ui.undoBtn.title = next
+    ? `Undo the last fix: ${next.device_name} · ${next.change_type_label}`
+    : "No fix to undo on this network";
+  const badge = ui.undoBtn.querySelector(".ng-undo-count"); // re-read: a busy spinner rebuilds the button
+  if (badge) {
+    badge.textContent = String(count);
+    badge.classList.toggle("d-none", count < 2);
+  }
+}
+
+function fixSummary(change) {
+  const values = change.current_value || change.proposed_value
+    ? `<div class="ng-undo-values small mt-1"><span>Now</span><span class="mono">${escapeHtml(change.proposed_value ?? "—")}</span>
+        <span>After undo</span><span class="mono">${escapeHtml(change.current_value ?? "—")}</span></div>` : "";
+  return `<strong>${escapeHtml(change.device_name)}</strong> · ${escapeHtml(change.change_type_label)}${values}`;
+}
+
+/** Undo an applied fix. Practice network: confirm, then put the model back. Lab or real device: the undo dialog
+ * (which connects to the device and puts its restore point back) is the confirmation. */
+async function undoFix(change, assessment, button) {
+  if (!change.simulated) {
+    state.workflow.undo(change, assessment);
+    return;
+  }
+  const applied = state.appliedFixes.find((fix) => fix.id === change.id);
+  const others = state.appliedFixes.filter((fix) => fix.id !== change.id).length;
+  const ok = await confirmDialog({
+    title: "Undo this fix?",
+    message: `<div class="ng-undo-summary mb-2">${fixSummary(change)}
+        ${applied?.applied_at ? `<div class="small text-muted-ng mt-1">Applied ${formatDate(applied.applied_at)}${applied.applied_by ? ` by ${escapeHtml(applied.applied_by)}` : ""}</div>` : ""}</div>
+      <p class="small mb-0">The practice network goes back to how it was before this fix, so the problem it solved shows again.${others ? ` ${others} other fix${others > 1 ? "es stay" : " stays"} applied.` : ""}</p>`,
+    confirmLabel: "Undo Fix",
+    danger: true,
+  });
+  if (!ok) return;
+  await withBusy(button, async () => {
+    try {
+      const result = await api.post(`/changes/${change.id}/undo`);
+      toast(`Fix undone: ${change.device_name} · ${change.change_type_label}`, "success");
+      if (state.analysis?.change.id === change.id) state.analysis.change = result.change;
+      await refresh();
+      await refreshIssuesQuietly();
+      renderPanel();
+    } catch (error) {
+      toast(error.message, "error", 7000);
+    }
+  });
+}
+
+async function undoFixById(changeId, button) {
+  try {
+    const change = await api.get(`/changes/${changeId}`);
+    const assessment = change.latest_assessment ? await api.get(`/assessments/${change.latest_assessment.id}`) : null;
+    if (!change.simulated && !assessment) {
+      toast("Open the change to undo it.", "info");
+      return;
+    }
+    await undoFix(change, assessment, button);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+/** Toolbar Undo Fix: always the newest fix on this network. */
+async function undoLastFix(button) {
+  await loadAppliedFixes();
+  const next = nextUndo();
+  if (!next) {
+    toast("There is no fix to undo on this network.", "info");
+    return;
+  }
+  await undoFixById(next.id, button);
+  updateUndoButton(); // the busy spinner re-enabled the button; set its real state again
 }
 
 /** Auto-Fix: validate one fix, then open the apply dialog (optional backup, apply, check, automatic undo). No approval wait. */
@@ -741,6 +853,7 @@ async function refresh({ resetPositions = false } = {}) {
   syncGraph(state.cy, store, { resetPositions });
   updateCanvasEmpty();
   updateDiscoveryStatus();
+  await loadAppliedFixes();
   renderPanel();
 }
 
@@ -770,6 +883,8 @@ function showNetworkPicker(networks) {
   const last = Number(localStorage.getItem(LAST_NETWORK_KEY));
   clearTopology();
   setNetworkControlsEnabled(false);
+  state.appliedFixes = [];
+  updateUndoButton();
   setPageTitle("Network Topology Workspace", "Choose a network");
   ui.networkSelect.querySelector("[data-placeholder]")?.remove();
   ui.networkSelect.insertAdjacentHTML("afterbegin", '<option value="" data-placeholder>Choose a network…</option>');
@@ -868,6 +983,8 @@ async function openNetwork(networkId) {
   setNetworkControlsEnabled(true);
   updateCanvasEmpty();
   updateDiscoveryStatus();
+  state.appliedFixes = [];
+  await loadAppliedFixes();
   renderPanel();
   await fitWorkspaceAfterLayout();
   return true;
@@ -898,19 +1015,19 @@ async function saveTopology(button) {
   });
 }
 
-async function reloadTopology() {
-  if (state.dirty) {
-    const ok = await confirmDialog({
-      title: "Discard unsaved layout?",
-      message: "<p class='mb-0'>Reloading restores device positions from the database. Unsaved moves will be lost.</p>",
-      confirmLabel: "Reload",
-    });
-    if (!ok) return;
-  }
+/** Put devices back where they were at the last Save. Fixes are not touched (Undo Fix does that). */
+async function discardLayout() {
+  const ok = await confirmDialog({
+    title: "Discard layout changes?",
+    message: "<p class='mb-0'>Devices go back to where they were when you last pressed <strong>Save</strong>.</p>",
+    confirmLabel: "Discard",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await refresh({ resetPositions: true });
     setDirty(false);
-    toast("Topology reloaded from database", "info");
+    toast("Layout changes discarded.", "info");
   } catch (error) {
     toast(error.message, "error");
   }
@@ -1064,7 +1181,8 @@ function bindToolbar() {
   ui.connectBtn.addEventListener("click", () => (state.connect.active ? cancelConnect() : startConnect()));
   document.getElementById("btn-connect-cancel").addEventListener("click", cancelConnect);
   document.getElementById("btn-save").addEventListener("click", (e) => saveTopology(e.currentTarget));
-  document.getElementById("btn-reload").addEventListener("click", reloadTopology);
+  ui.discardBtn.addEventListener("click", discardLayout);
+  ui.undoBtn.addEventListener("click", (e) => undoLastFix(e.currentTarget));
   document.getElementById("btn-health").addEventListener("click", (e) => runHealthCheck(e.currentTarget));
   document.getElementById("btn-connections").addEventListener("click", () => showConnections());
   document.getElementById("btn-report").addEventListener("click", (e) => saveNetworkReport(e.currentTarget));
@@ -1072,7 +1190,7 @@ function bindToolbar() {
     if (state.cy.nodes().empty()) return;
     autoArrange(state.cy, store.network);
     setDirty(true);
-    toast("Devices auto-arranged. Save Topology to keep this layout.", "info");
+    toast("Devices auto-arranged. Press Save to keep this layout.", "info");
   });
   document.getElementById("btn-fit").addEventListener("click", () => fitGraph(state.cy));
   document.getElementById("btn-zoom-in").addEventListener("click", () =>
@@ -1089,7 +1207,7 @@ function bindToolbar() {
       .map(
         ([type, meta]) =>
           `<button type="button" class="ng-palette-item" data-device-type="${type}" title="Add ${meta.label}">
-            <img src="${deviceIcon(type)}" alt="">${meta.short || meta.label}</button>`
+            <img src="${deviceIcon(type)}" alt=""><span class="lbl">${meta.short || meta.label}</span></button>`
       )
       .join("")
   );
@@ -1177,6 +1295,12 @@ function bindPanel() {
         break;
       case "show-executions":
         state.workflow.showExecutions(state.analysis.change);
+        break;
+      case "undo-change":
+        undoFix(state.analysis.change, state.analysis.assessment, target);
+        break;
+      case "undo-fix":
+        undoFixById(Number(target.dataset.changeId), target);
         break;
       case "confirm-change":
       case "rollback-change":

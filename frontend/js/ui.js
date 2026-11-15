@@ -128,7 +128,7 @@ export function showFormError(form, message) {
 export async function withBusy(button, action) {
   const original = button.innerHTML;
   button.disabled = true;
-  button.innerHTML = `<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>${button.textContent.trim()}`;
+  button.innerHTML = `<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>${escapeHtml(button.dataset.busyLabel || button.textContent.trim())}`;
   try {
     return await action();
   } finally {

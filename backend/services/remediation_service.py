@@ -35,7 +35,8 @@ from backend.core.permissions import EXECUTE, PRODUCTION, has
 from backend.models import ChangeExecution, Device, Network
 from backend.models.credential_profile import CredentialAssignment
 from backend.services import (analysis_service, change_detector, cli_generator, collection_service, config_diff,
-                              credential_service, device_state, history_service, impact_engine, validation_engine)
+                              credential_service, device_state, history_service, impact_engine, model_snapshot,
+                              validation_engine)
 from backend.services.forwarding import FlowAnalyzer
 from backend.services.network_model import load_model
 
@@ -351,6 +352,7 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
             except cli.CliError as exc:
                 note(f"Device revert timer could not be armed ({exc}); NetGuard's confirmation window still applies.")
     # 3. apply
+    before_model = model_snapshot.take(db, change.network_id)
     applied_ok, error = True, None
     try:
         cli.apply_config(target, commands)
@@ -405,7 +407,9 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
     elif success:
         execution.status = "applied"
         change.status = "applied"
-        note("Verification passed; the change is kept.")
+        note("Verification passed; the change is kept. Undo it any time with Undo Fix on the toolbar.")
+    if success:
+        verification["undo"] = model_snapshot.changed(before_model, model_snapshot.take(db, change.network_id))
     else:
         # 5. rollback from the backup
         current = post_text
@@ -501,6 +505,7 @@ def _execute_simulated(db: Session, user, change, device, network, pre, detected
     expected = _state(change_detector.apply(pre, detected), change.device_id, change.interface_id, change.change_type)
     pre_findings, pre_working, _ = _assess(pre)
     db.flush()
+    before_model = model_snapshot.take(db, change.network_id)
     savepoint = db.begin_nested()
     try:
         apply_service._mutate(db, change)
@@ -525,8 +530,9 @@ def _execute_simulated(db: Session, user, change, device, network, pre, detected
     success = verification["intended_state"] and not verification["new_findings"] and not verification["broken_flows"] \
         and not verification["error"]
     if success:
+        verification["undo"] = model_snapshot.changed(before_model, model_snapshot.take(db, change.network_id))
         savepoint.commit()
-        note("The fix is kept.")
+        note("The fix is kept. Undo it any time with Undo Fix on the toolbar.")
     else:
         savepoint.rollback()
         note("The check failed, so the fix was undone; the network is as it was before.")
@@ -770,6 +776,125 @@ def rollback_now(db: Session, user, change, data: dict) -> ChangeExecution:
                            {"change_id": change.id, "status": execution.status}, {"log": execution.log, "rollback_commands": rollback})
     db.refresh(execution)
     return execution
+
+
+def undo(db: Session, user, change, data: dict) -> ChangeExecution:
+    """Undo an applied fix. Practice network: its devices are put back in NetGuard's model. Lab or real device: the
+    restore point taken before the fix is put back on the device, then the model is updated from the device."""
+    from backend.models import Change, DeviceConfig
+
+    if change.status != "applied":
+        raise ConflictError("Only an applied fix can be undone.")
+    execution = db.scalar(select(ChangeExecution).where(ChangeExecution.change_id == change.id,
+                                                       ChangeExecution.status == "applied")
+                          .order_by(ChangeExecution.id.desc()))
+    if execution is None:
+        raise ConflictError("This change was recorded as deployed outside NetGuard; undo it on the device, then "
+                            "collect the configuration again.")
+    if not (has(user, EXECUTE) or admin_direct(user)):
+        raise ForbiddenError("Your user group may not apply or undo fixes.")
+    newer = db.scalar(select(ChangeExecution).join(Change, Change.id == ChangeExecution.change_id)
+                      .where(Change.network_id == change.network_id, ChangeExecution.id > execution.id,
+                             ChangeExecution.status == "applied").order_by(ChangeExecution.id.desc()))
+    if newer is not None:
+        raise ConflictError(f"A newer fix on this network is still applied ({newer.device_name}, change #{newer.change_id}). "
+                            "Undo fixes from the newest to the oldest.")
+    snapshot = (execution.verification or {}).get("undo")
+    device = db.get(Device, change.device_id)
+    log = list(execution.log or [])
+
+    def note(text):
+        log.append({"at": _now().isoformat(timespec="seconds"), "step": text})
+
+    note(f"Undo requested by {user.username}.")
+    if execution.transport == "simulated":
+        if snapshot is None:
+            raise ConflictError("This fix was applied by an earlier NetGuard version that kept no undo record. "
+                                "Use Start again on the practice network instead.")
+        names = model_snapshot.restore(db, snapshot)
+        note(f"Practice network: {', '.join(names) or device.name} put back as before the fix.")
+    else:
+        if device is None:
+            raise ConflictError("The device no longer exists.")
+        production = not device.is_lab
+        if production and not (has(user, PRODUCTION) or admin_direct(user)):
+            raise ForbiddenError("Undoing a fix on a real-network device needs the real-network permission.")
+        backup = db.get(DeviceConfig, execution.backup_config_id) if execution.backup_config_id else None
+        if backup is None or not (backup.text or "").strip():
+            raise ConflictError("No restore point is stored for this fix; undo it on the device by hand.")
+        target = _target(db, user, device, data)
+        restored, rollback, after, message = _restore(target, backup.text)
+        note(message)
+        if not restored:
+            execution.log = log
+            db.commit()
+            raise ValidationFailed(f"The fix could not be undone: {message}")
+        if production:
+            try:
+                cli.save_config(target)
+                note("Configuration saved to the startup configuration.")
+            except cli.CliError as exc:
+                note(f"The configuration could not be saved ({exc}); save it on the device.")
+        if after:
+            device_state.store_config(db, device, after, execution.transport, "post-change", user)
+            dev, warnings = device_state.parse_one(after, device.name)
+            if dev is not None:
+                device_state.apply_config(db, device, dev, warnings)
+        execution.rollback_commands = rollback
+    note("The fix is undone.")
+    execution = db.get(ChangeExecution, execution.id)
+    change = db.get(type(change), change.id)
+    execution.status = "rolled_back"
+    change.status = "rolled_back"
+    execution.log = log
+    execution.verification = {**(execution.verification or {}), "undone_by": user.username,
+                              "undone_at": _now().isoformat(timespec="seconds")}
+    network = db.get(Network, change.network_id)
+    meta = dict(network.metadata_json or {})
+    meta["last_remediation"] = {"change_id": change.id, "status": "undone", "at": _now().isoformat(timespec="seconds")}
+    network.metadata_json = meta
+    from backend.services import network_service
+    network_service.touch(network)
+    db.commit()
+    history_service.record(db, user, change.network_id, "remediation", f"Fix undone: {execution.device_name}",
+                           {"change_id": change.id, "status": "undone", "transport": execution.transport},
+                           {"log": log, "rollback_commands": execution.rollback_commands})
+    db.refresh(execution)
+    return execution
+
+
+def applied_fixes(db: Session, network_id: int) -> list[dict]:
+    """Fixes still applied on a network, newest first, in the order Undo takes them. Only the newest fix applied by
+    NetGuard can be undone next; a change recorded as deployed outside NetGuard has no undo record."""
+    from backend.models import Change, User
+    from backend.services import change_service
+
+    changes = db.scalars(select(Change).where(Change.network_id == network_id, Change.status == "applied")).all()
+    rows = []
+    for change in changes:
+        execution = db.scalar(select(ChangeExecution).where(ChangeExecution.change_id == change.id,
+                                                           ChangeExecution.status == "applied")
+                              .order_by(ChangeExecution.id.desc()))
+        rows.append((change, execution))
+    rows.sort(key=lambda r: ((r[1].finished_at or r[1].started_at) if r[1] else r[0].updated_at,
+                             r[1].id if r[1] else 0), reverse=True)
+    newest = max((e.id for _, e in rows if e is not None), default=None)
+    out = []
+    for change, execution in rows:
+        item = change_service.to_out(db, change).model_dump(mode="json")
+        if execution is None:
+            item.update(applied_at=item["updated_at"], applied_by=None, transport="recorded", can_undo=False,
+                        undo_next=False, undo_note="Recorded as deployed outside NetGuard; undo it on the device.")
+        else:
+            undo_record = (execution.transport == "simulated" and (execution.verification or {}).get("undo") is not None) \
+                or (execution.transport != "simulated" and execution.backup_config_id is not None)
+            user = db.get(User, execution.executed_by) if execution.executed_by else None
+            item.update(applied_at=(execution.finished_at or execution.started_at).isoformat(),
+                        applied_by=user.username if user else None, transport=execution.transport,
+                        can_undo=bool(undo_record), undo_next=execution.id == newest and bool(undo_record),
+                        undo_note=None if undo_record else "No undo record was kept for this fix.")
+        out.append(item)
+    return out
 
 
 def execution_out(row: ChangeExecution) -> dict:
