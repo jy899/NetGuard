@@ -455,7 +455,6 @@ def _mikrotik(text: str, hostname: str | None) -> Dev:
                 dev.facts["vty"].append({"kind": "vty", "lines": "ip service telnet", "transport": ["telnet"], "access_class": None})
             if re.search(r"\bwww\b(?!-ssl)", s) and enabled:
                 dev.facts["http_server"] = True
-            del service
         elif section == "/interface bridge vlan" and s.startswith("add") and attrs.get("vlan-ids", "").isdigit():
             dev.vlans.setdefault(int(attrs["vlan-ids"]), None)
     dev.ip_routing = True

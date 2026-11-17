@@ -18,6 +18,23 @@ function statCard({ label, value, icon, tone = "", note }) {
     </div>`;
 }
 
+// The issue count covers analysed networks only, so a network nobody has analysed is not shown as "0 issues".
+function issuesCard(summary) {
+  const networks = summary.networks ?? 0;
+  const analysed = summary.analysed_networks ?? 0;
+  const none = networks > 0 && analysed === 0;
+  let note = "From the latest analyses";
+  if (none) note = "Not analysed yet · press Analyze on the map";
+  else if (analysed < networks) note = `From the latest analyses · ${analysed} of ${networks} networks analysed`;
+  return statCard({
+    label: "Detected Issues",
+    value: none ? "—" : summary.detected_issues ?? 0,
+    icon: "bi-exclamation-triangle",
+    tone: "warn",
+    note,
+  });
+}
+
 function renderStats(summary) {
   document.getElementById("stat-cards").innerHTML = [
     statCard({ label: "Networks", value: summary.networks, icon: "bi-hdd-network", note: "Modelled networks" }),
@@ -27,13 +44,7 @@ function renderStats(summary) {
       icon: "bi-router",
       note: `${summary.interfaces} interfaces · ${summary.links} links`,
     }),
-    statCard({
-      label: "Detected Issues",
-      value: summary.detected_issues ?? 0,
-      icon: "bi-exclamation-triangle",
-      tone: "warn",
-      note: "From the latest analyses",
-    }),
+    issuesCard(summary),
     statCard({
       label: "Changes",
       value: summary.total_changes ?? 0,

@@ -29,9 +29,11 @@ function mount(html) {
 
 function credentialFields(prefix, method) {
   return `<div class="row g-2">
-    <div class="col-md-6${method === "snmpv2c" ? " d-none" : ""}"><label class="form-label small" for="${prefix}-user">${method === "snmpv3" ? "SNMPv3 user" : "Username"}</label>
+    ${method === "ssh" ? `<div class="col-md-3"><label class="form-label small" for="${prefix}-port">SSH port</label>
+      <input id="${prefix}-port" type="number" min="1" max="65535" class="form-control" placeholder="22" inputmode="numeric"></div>` : ""}
+    <div class="${method === "ssh" ? "col-md-4" : "col-md-6"}${method === "snmpv2c" ? " d-none" : ""}"><label class="form-label small" for="${prefix}-user">${method === "snmpv3" ? "SNMPv3 user" : "Username"}</label>
       <input id="${prefix}-user" class="form-control" maxlength="64" autocomplete="off"${method === "snmpv2c" ? ' value="community"' : ""}></div>
-    <div class="col-md-6"><label class="form-label small" for="${prefix}-password">${method === "snmpv3" ? "Authentication passphrase" : method === "snmpv2c" ? "Read-only community string" : "Password"}</label>
+    <div class="${method === "ssh" ? "col-md-5" : "col-md-6"}"><label class="form-label small" for="${prefix}-password">${method === "snmpv3" ? "Authentication passphrase" : method === "snmpv2c" ? "Read-only community string" : "Password"}</label>
       <input id="${prefix}-password" type="password" class="form-control" maxlength="128" autocomplete="new-password"></div>
     ${method === "snmpv3" ? `<div class="col-md-6"><label class="form-label small" for="${prefix}-priv">Privacy passphrase</label>
       <input id="${prefix}-priv" type="password" class="form-control" maxlength="128" autocomplete="new-password"></div>
@@ -46,6 +48,38 @@ async function profilesFor(method) {
   try {
     return (await api.get("/credential-profiles")).filter((p) => (p.method || "ssh") === method);
   } catch { return []; }
+}
+
+/** Ordered queue of saved profiles to try when the entered credentials fail (each once per device, first success wins). */
+async function fallbackQueue(prefix, methods) {
+  let profiles = [];
+  try { profiles = (await api.get("/credential-profiles")).filter((p) => methods.includes(p.method || "ssh")); } catch { /* optional */ }
+  if (!profiles.length) return "";
+  return `<details class="small mt-2" data-fallback="${prefix}"><summary>Fallback: try saved profiles in order if these credentials fail (${profiles.length})</summary>
+    <ol class="list-unstyled mb-1 mt-1" data-fallback-list="${prefix}">${profiles.map((p) => `<li class="d-flex align-items-center gap-2 py-1" data-fallback-id="${p.id}">
+      <input class="form-check-input mt-0" type="checkbox" id="${prefix}-fb-${p.id}" data-fallback-pick checked>
+      <label class="flex-grow-1" for="${prefix}-fb-${p.id}">${escapeHtml(p.name)} · ${escapeHtml(p.username)} · ${escapeHtml(METHOD_LABELS[p.method || "ssh"])}</label>
+      <button type="button" class="btn btn-sm btn-light border py-0" data-fallback-up aria-label="Move ${escapeHtml(p.name)} up"><i class="bi bi-arrow-up"></i></button></li>`).join("")}</ol>
+    <div class="text-muted-ng">Each profile is tried once per device, in this order; the first one accepted is used. Leave the credential fields empty to try only these.</div></details>`;
+}
+
+function fallbackIds(root, prefix) {
+  return [...root.querySelectorAll(`[data-fallback-list="${prefix}"] [data-fallback-id]`)]
+    .filter((li) => li.querySelector("[data-fallback-pick]").checked).map((li) => Number(li.dataset.fallbackId));
+}
+
+function bindFallbackOrder(root) {
+  root.addEventListener("click", (event) => {
+    const up = event.target.closest("[data-fallback-up]");
+    if (!up) return;
+    const item = up.closest("li");
+    if (item.previousElementSibling) item.parentElement.insertBefore(item, item.previousElementSibling);
+  });
+}
+
+function methodNote(request, method) {
+  const note = request.method_notes?.[method];
+  return note ? `<div class="small ${(request.detected || []).includes(method) ? "text-success" : "text-muted-ng"}">${escapeHtml(note)}</div>` : "";
 }
 
 // ------------------------------------------------------------ progress timeline
@@ -78,7 +112,7 @@ function createCredentialDialog() {
   const element = mount(`<div class="modal" id="credential-request-modal" tabindex="-1" aria-labelledby="cr-title" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable"><div class="modal-content">
       <div class="modal-header"><div><h5 class="modal-title" id="cr-title">Authentication can improve discovery</h5>
-        <div class="small text-muted-ng">Optional · credentials are never guessed or tried automatically · use a read-only account</div></div>
+        <div class="small text-muted-ng">Optional · credentials are never guessed · saved profiles are tried once each · use a read-only account</div></div>
         <button type="button" class="btn-close" id="cr-close" aria-label="Skip for now"></button></div>
       <div class="modal-body">
         <div id="cr-device" class="d-flex flex-wrap gap-2 align-items-center mb-2"></div>
@@ -92,7 +126,9 @@ function createCredentialDialog() {
           <div class="row g-2 mb-2"><div class="col-md-6"><label class="form-label small" for="cr-profile">Saved credential profile</label>
             <select id="cr-profile" class="form-select"><option value="">Enter credentials</option></select></div>
             </div>
+          <div id="cr-method-note" class="mb-2"></div>
           <div id="cr-fields"></div>
+          <div id="cr-fallback"></div>
           <fieldset class="mt-3" id="cr-reuse-box"><legend class="form-label small fw-semibold mb-1">Use the same credentials for</legend><div id="cr-reuse" class="d-flex flex-column gap-1"></div></fieldset>
           <div class="form-check mt-3"><input class="form-check-input" type="checkbox" id="cr-remember">
             <label class="form-check-label small" for="cr-remember">Remember securely (encrypted on this NetGuard server as a credential profile)</label></div>
@@ -117,6 +153,8 @@ function createCredentialDialog() {
   async function methodChanged() {
     const chosen = method();
     $("cr-fields").innerHTML = credentialFields("cr", chosen);
+    $("cr-method-note").innerHTML = state ? methodNote(state.request, chosen) : "";
+    $("cr-fallback").innerHTML = state ? await fallbackQueue("cr", state.request.methods) : "";
     const profiles = await profilesFor(chosen);
     $("cr-profile").innerHTML = '<option value="">Enter credentials</option>' + profiles.map((p) =>
       `<option value="${p.id}">${escapeHtml(p.name)} · ${escapeHtml(p.username)} · ${escapeHtml(METHOD_LABELS[p.method || "ssh"])}</option>`).join("");
@@ -135,7 +173,7 @@ function createCredentialDialog() {
       ${badge(request.auth === "failed" ? "auth_failed" : "auth_required", labels)}`;
     $("cr-reason").textContent = request.reason;
     $("cr-gains").innerHTML = request.gains.map((g) => `<li>${escapeHtml(g.text)}</li>`).join("");
-    $("cr-methods").innerHTML = request.methods.map((m, i) => `<div class="form-check"><input class="form-check-input" type="radio" name="cr-method" id="cr-method-${m}" value="${m}" ${i === 0 ? "checked" : ""}><label class="form-check-label" for="cr-method-${m}">${escapeHtml(METHOD_LABELS[m])}</label></div>`).join("");
+    $("cr-methods").innerHTML = request.methods.map((m, i) => `<div class="form-check"><input class="form-check-input" type="radio" name="cr-method" id="cr-method-${m}" value="${m}" ${i === 0 ? "checked" : ""}><label class="form-check-label" for="cr-method-${m}">${escapeHtml(METHOD_LABELS[m])}${request.detected && !request.detected.includes(m) ? ' <span class="small text-muted-ng">(not seen in the scan)</span>' : ""}</label></div>`).join("");
     $("cr-not-offered").innerHTML = request.not_offered.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
     $("cr-reuse").innerHTML = request.reuse_candidates.length ? request.reuse_candidates.map((c) => `<div class="form-check"><input class="form-check-input" type="checkbox" id="cr-reuse-${c.device_id}" data-reuse-device="${c.device_id}" data-methods="${c.methods.join(",")}" ${c.preselected ? "checked" : ""}>
         <label class="form-check-label small" for="cr-reuse-${c.device_id}">${escapeHtml(c.name)} <span class="mono text-muted-ng">${escapeHtml(c.ip)}</span></label></div>`).join("") : '<div class="small text-muted-ng">No other pending device supports these methods.</div>';
@@ -170,6 +208,7 @@ function createCredentialDialog() {
   $("cr-skip").addEventListener("click", () => skip(false));
   $("cr-skip-all").addEventListener("click", () => skip(true));
   $("cr-methods").addEventListener("change", methodChanged);
+  bindFallbackOrder(element);
   $("cr-remember").addEventListener("change", () => $("cr-profile-name-box").classList.toggle("d-none", !$("cr-remember").checked));
   $("cr-profile").addEventListener("change", () => {
     const usingProfile = !!$("cr-profile").value;
@@ -185,9 +224,11 @@ function createCredentialDialog() {
     const body = { device_ids: ids, method: chosen, profile_id: Number($("cr-profile").value) || null,
       username: $("cr-user")?.value.trim() || "", password: $("cr-password")?.value || "", priv_password: $("cr-priv")?.value || "",
       ...($("cr-auth-protocol") ? { snmp_auth_protocol: $("cr-auth-protocol").value, snmp_priv_protocol: $("cr-priv-protocol").value } : {}),
-      remember: $("cr-remember").checked, profile_name: $("cr-profile-name").value.trim() || null };
+      remember: $("cr-remember").checked, profile_name: $("cr-profile-name").value.trim() || null,
+      ssh_port: Number($("cr-port")?.value) || null, fallback_profile_ids: fallbackIds(element, "cr") };
     clearSecrets();
-    if (!body.profile_id && (!body.username || !body.password)) { error("Enter a username and password, choose a saved profile, or skip this device."); return; }
+    if (chosen === "snmpv2c") body.username = body.username || "community";
+    if (!body.profile_id && (!body.username || !body.password) && !body.fallback_profile_ids.length) { error("Enter credentials, choose a saved profile, tick saved profiles to try in order, or skip this device."); return; }
     const locked = ["cr-submit", "cr-skip", "cr-skip-all", "cr-close"].map((id) => $(id));
     current.busy = true;
     locked.forEach((button) => { button.disabled = true; });
@@ -198,7 +239,7 @@ function createCredentialDialog() {
       current.result = response.result;
       current.attempted = true;
       if (!primary?.ok) {
-        error(`${primary?.detail || "Authentication failed."} Check the credentials and try again, choose another method, or skip.`);
+        error(`${primary?.detail || "Authentication failed."} Check the credentials (and the SSH port), choose another method, or skip.`);
         return;
       }
       if (response.profile_note) toast(response.profile_note, "warning");
@@ -303,14 +344,26 @@ function createGroupDialog() {
     const current = groups();
     const sections = [];
     for (const [method, ids] of current) {
-      const names = ids.map((id) => state.devices.find((d) => d.device_id === id).name).join(", ");
+      const members = ids.map((id) => state.devices.find((d) => d.device_id === id));
+      const split = state.split.has(method) && ids.length > 1;
       const profiles = await profilesFor(method);
+      const unseen = members.filter((d) => d.method_notes?.[method] && !(d.detected || []).includes(method));
+      const sameNote = unseen.length > 1 && unseen.every((d) => d.method_notes[method] === unseen[0].method_notes[method]);
+      const notes = sameNote
+        ? `<li><strong>${escapeHtml(unseen.map((d) => d.name).join(", "))}</strong>: ${escapeHtml(unseen[0].method_notes[method])}</li>`
+        : unseen.map((d) => `<li><strong>${escapeHtml(d.name)}</strong>: ${escapeHtml(d.method_notes[method])}</li>`).join("");
+      const perDevice = members.map((d) => `<div class="border-top pt-2 mt-2"><div class="small fw-semibold mb-1">${escapeHtml(d.name)} <span class="mono text-muted-ng">${escapeHtml(d.ip)}</span></div>
+          ${credentialFields(`da-${method}-d${d.device_id}`, method)}</div>`).join("");
       sections.push(`<section class="border rounded p-3 mb-2" data-da-group="${method}"><div class="d-flex justify-content-between flex-wrap gap-2 mb-2">
-          <strong>${escapeHtml(METHOD_LABELS[method])}</strong><span class="small text-muted-ng">${escapeHtml(names)}</span></div>
-        <div class="row g-2 mb-2"><div class="col-md-6"><label class="form-label small" for="da-${method}-profile">Saved credential profile</label>
+          <strong>${escapeHtml(METHOD_LABELS[method])}</strong><span class="small text-muted-ng">${escapeHtml(members.map((d) => d.name).join(", "))}</span></div>
+        ${notes ? `<ul class="small text-muted-ng mb-2 ps-3">${notes}</ul>` : ""}
+        ${ids.length > 1 ? `<div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" id="da-${method}-split" data-da-split="${method}" ${split ? "checked" : ""}>
+          <label class="form-check-label small" for="da-${method}-split">Different credentials for each device</label></div>` : ""}
+        ${split ? perDevice : `<div class="row g-2 mb-2"><div class="col-md-6"><label class="form-label small" for="da-${method}-profile">Saved credential profile</label>
           <select id="da-${method}-profile" class="form-select"><option value="">Enter credentials</option>${profiles.map((p) => `<option value="${p.id}">${escapeHtml(p.name)} · ${escapeHtml(p.username)}</option>`).join("")}</select></div>
           </div>
-        ${credentialFields(`da-${method}`, method)}
+        ${credentialFields(`da-${method}`, method)}`}
+        ${await fallbackQueue(`da-${method}`, [method])}
         <div class="form-check mt-2"><input class="form-check-input" type="checkbox" id="da-${method}-remember"><label class="form-check-label small" for="da-${method}-remember">Remember securely (encrypted credential profile)</label></div>
       </section>`);
     }
@@ -323,7 +376,14 @@ function createGroupDialog() {
     $("da-profiles").innerHTML = `<h6 class="small fw-semibold">Saved credential profiles</h6>${profiles.length ? `<table class="table ng-table small"><thead><tr><th>Name</th><th>Method</th><th>Username</th><th>Secret</th><th></th></tr></thead><tbody>${profiles.map((p) => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(METHOD_LABELS[p.method || "ssh"])}</td><td>${escapeHtml(p.username)}</td><td>${p.has_password ? "Saved · encrypted" : "—"}</td><td><button type="button" class="btn btn-sm btn-outline-danger" data-da-remove-profile="${p.id}">Remove</button></td></tr>`).join("")}</tbody></table>` : '<p class="small text-muted-ng mb-0">No credentials are remembered. Tick "Remember securely" when authenticating to save one.</p>'}`;
   }
 
+  bindFallbackOrder(element);
   element.addEventListener("change", (event) => {
+    if (event.target.matches("[data-da-split]")) {
+      const method = event.target.dataset.daSplit;
+      if (event.target.checked) state.split.add(method); else state.split.delete(method);
+      renderGroups();
+      return;
+    }
     if (event.target.matches("[data-da-method], [data-da-include]")) renderGroups();
     if (event.target.matches("[id$='-profile']")) {
       const method = event.target.id.replace(/^da-/, "").replace(/-profile$/, "");
@@ -355,27 +415,39 @@ function createGroupDialog() {
     $("da-close").disabled = true;
     const lines = [];
     try {
+      const read = (prefix, method) => ({
+        username: $(`${prefix}-user`)?.value.trim() || (method === "snmpv2c" ? "community" : ""),
+        password: $(`${prefix}-password`)?.value || "", priv_password: $(`${prefix}-priv`)?.value || "",
+        ssh_port: Number($(`${prefix}-port`)?.value) || null,
+        ...($(`${prefix}-auth-protocol`) ? { snmp_auth_protocol: $(`${prefix}-auth-protocol`).value, snmp_priv_protocol: $(`${prefix}-priv-protocol`).value } : {}),
+      });
       for (const [method, ids] of work) {
-        const profileId = Number($(`da-${method}-profile`).value) || null;
-        const body = { device_ids: ids, method, profile_id: profileId, username: $(`da-${method}-user`)?.value.trim() || "",
-          password: $(`da-${method}-password`)?.value || "", priv_password: $(`da-${method}-priv`)?.value || "",
-          ...($(`da-${method}-auth-protocol`) ? { snmp_auth_protocol: $(`da-${method}-auth-protocol`).value, snmp_priv_protocol: $(`da-${method}-priv-protocol`).value } : {}),
-          remember: $(`da-${method}-remember`)?.checked || false };
+        const split = current.split.has(method) && ids.length > 1;
+        const profileId = split ? null : Number($(`da-${method}-profile`)?.value) || null;
+        const fallback = fallbackIds(element, `da-${method}`);
+        const remember = $(`da-${method}-remember`)?.checked || false;
+        // One request per device when each has its own credentials; otherwise one request for the group.
+        const batches = split ? ids.map((id) => ({ ids: [id], ...read(`da-${method}-d${id}`, method) })) : [{ ids, ...read(`da-${method}`, method) }];
         element.querySelectorAll(`[data-da-group="${method}"] input[type=password]`).forEach((input) => { input.value = ""; });
-        if (!profileId && (!body.username || !body.password)) { lines.push(`${METHOD_LABELS[method]}: enter credentials or choose a saved profile.`); continue; }
-        try {
-          const response = await api.post(`/discovery/${current.networkId}/authenticate`, body);
-          current.result = response.result;
-          current.attempted = true;
-          if (response.outcomes.some((o) => o.ok)) current.changed = true;
-          response.outcomes.forEach((o) => lines.push(`${o.ok ? "✓" : "✗"} ${o.name}: ${o.detail}`));
-          // Successful devices leave the list; failed ones stay selectable for a corrected attempt.
-          const pending = new Set((response.result.available_authentications || []).map((d) => d.device_id));
-          element.querySelectorAll("[data-da-include]").forEach((box) => {
-            if (!pending.has(Number(box.dataset.daInclude))) box.closest("tr").remove();
-          });
-          if (response.profile_note) lines.push(response.profile_note);
-        } catch (err) { lines.push(`${METHOD_LABELS[method]}: ${err.message}`); }
+        for (const batch of batches) {
+          const { ids: deviceIds, ...creds } = batch;
+          const names = deviceIds.map((id) => current.devices.find((d) => d.device_id === id)?.name).join(", ");
+          if (!profileId && (!creds.password) && !fallback.length) { lines.push(`${METHOD_LABELS[method]} · ${names}: enter credentials, choose a saved profile or tick profiles to try in order.`); continue; }
+          const body = { device_ids: deviceIds, method, profile_id: profileId, ...creds, fallback_profile_ids: fallback, remember };
+          try {
+            const response = await api.post(`/discovery/${current.networkId}/authenticate`, body);
+            current.result = response.result;
+            current.attempted = true;
+            if (response.outcomes.some((o) => o.ok)) current.changed = true;
+            response.outcomes.forEach((o) => lines.push(`${o.ok ? "✓" : "✗"} ${o.name}: ${o.detail}`));
+            // Successful devices leave the list; failed ones stay selectable for a corrected attempt.
+            const pending = new Set((response.result.available_authentications || []).map((d) => d.device_id));
+            element.querySelectorAll("[data-da-include]").forEach((box) => {
+              if (!pending.has(Number(box.dataset.daInclude))) box.closest("tr").remove();
+            });
+            if (response.profile_note) lines.push(response.profile_note);
+          } catch (err) { lines.push(`${METHOD_LABELS[method]} · ${names}: ${err.message}`); }
+        }
       }
       $("da-results").innerHTML = `<ul class="small mb-0">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`;
       await renderGroups();
@@ -390,13 +462,13 @@ function createGroupDialog() {
   return {
     open(networkId, devices, { title = "Authenticate devices", manageProfiles = false, preselect = null } = {}) {
       return new Promise((resolve) => {
-        state = { networkId, devices, resolve, result: null, manageProfiles, busy: false, changed: false };
+        state = { networkId, devices, resolve, result: null, manageProfiles, busy: false, changed: false, split: new Set() };
         $("da-title").textContent = title;
         $("da-results").innerHTML = "";
         $("da-devices").innerHTML = devices.length ? `<table class="table ng-table small mb-0"><thead><tr><th>Include</th><th>Device</th><th>Method</th></tr></thead><tbody>${devices.map((d) => `<tr>
             <td><input class="form-check-input" type="checkbox" data-da-include="${d.device_id}" aria-label="Include ${escapeHtml(d.name)}" ${!preselect || preselect.includes(d.device_id) ? "checked" : ""}></td>
             <td><strong>${escapeHtml(d.name)}</strong> <span class="mono text-muted-ng">${escapeHtml(d.ip)}</span>${d.auth === "failed" ? ' <span class="badge text-bg-danger">Failed</span>' : ""}</td>
-            <td><select class="form-select form-select-sm" data-da-method="${d.device_id}" aria-label="Method for ${escapeHtml(d.name)}">${d.methods.map((m) => `<option value="${m}">${escapeHtml(METHOD_LABELS[m])}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>`
+            <td><select class="form-select form-select-sm" data-da-method="${d.device_id}" aria-label="Method for ${escapeHtml(d.name)}">${d.methods.map((m) => `<option value="${m}" title="${escapeHtml(d.method_notes?.[m] || "")}">${escapeHtml(METHOD_LABELS[m])}${d.detected && !d.detected.includes(m) ? " · not seen in scan" : ""}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>`
           : '<p class="small text-muted-ng">Every device that offers secure management has already been authenticated, or nothing more can be learned by authenticating it.</p>';
         $("da-submit").classList.toggle("d-none", !devices.length);
         renderGroups();
@@ -450,6 +522,20 @@ export async function openAuthentication(networkId, result, { deviceIds = null, 
 }
 
 // ------------------------------------------------------------ discovery report
+/** Routed segments (other VLANs): found inside the authorised scope, swept, or left out with the reason. */
+function segmentsSection(result) {
+  const seg = result.segments;
+  const leftRouters = result.subnets_not_scanned || [];
+  if (!seg && !leftRouters.length) return "";
+  const swept = new Set(seg?.swept || []);
+  const found = (seg?.answered || []).map((r) => `<li><span class="mono">${escapeHtml(r.cidr)}</span> — ${r.ip ? `gateway <span class="mono">${escapeHtml(r.ip)}</span> answered (${escapeHtml(r.via || "")})` : escapeHtml(r.via || "local interface")} · ${swept.has(r.cidr) ? '<span class="text-success">swept</span>' : '<span class="text-muted-ng">not swept</span>'}</li>`).join("");
+  const left = [...(seg?.left_out || []), ...leftRouters].map((r) => `<li><span class="mono">${escapeHtml(r.cidr)}</span> — ${escapeHtml(r.reason)}</li>`).join("");
+  return `<h6>Routed segments</h6><div class="small mb-3" data-report="segments">
+    ${seg ? `<p class="mb-1">Authorised scope <span class="mono">${escapeHtml(seg.scope)}</span>: ${seg.probed} segment(s) checked on ${seg.gateways_checked} gateway address(es), ${(seg.answered || []).length} answered, ${swept.size} swept.${seg.note ? ` ${escapeHtml(seg.note)}` : ""}</p>` : ""}
+    ${found ? `<ul class="mb-1">${found}</ul>` : ""}
+    ${left ? `<div class="fw-semibold mt-1">Left out</div><ul class="mb-0">${left}</ul>` : ""}</div>`;
+}
+
 export function renderReport(result) {
   const report = result.report;
   const labels = report.labels;
@@ -484,5 +570,6 @@ export function renderReport(result) {
       <a class="btn btn-sm btn-primary" data-report-open href="/topology?network=${result.network_id}">Open Topology</a></span></div>
     <div class="table-responsive mb-3"><table class="table ng-table small" data-report="devices"><thead><tr><th>Device</th><th>Identified as</th><th>Status</th><th>Missing / notes</th><th>Authentication</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <h6>Connections</h6>${pairs ? `<div class="table-responsive mb-3"><table class="table ng-table small" data-report="connections"><tbody>${pairs}</tbody></table></div>` : '<p class="small text-muted-ng">No cable has been verified. ICMP, DNS, the gateway hop and DHCP facts never establish a cable; authenticate a switch to read its neighbour and MAC tables.</p>'}
+    ${segmentsSection(result)}
     ${report.unreachable.length ? `<h6>Unreachable</h6><ul class="small" data-report="unreachable">${report.unreachable.map((u) => `<li><strong>${escapeHtml(u.name)}</strong> <span class="mono">${escapeHtml(u.ip)}</span> — ${escapeHtml(u.detail)}</li>`).join("")}</ul>` : ""}`;
 }

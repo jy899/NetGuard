@@ -65,6 +65,12 @@ def infer_neighbours(network_id: int, db: DbSession, user: CurrentUser):
     return result
 
 
+@router.post("/{network_id}/cabling-baseline")
+def accept_cabling(network_id: int, db: DbSession, _: CurrentUser):
+    from backend.services import lab_import_service
+    return lab_import_service.accept_cabling(db, network_service.get_network(db, network_id))
+
+
 @router.get("/import/sample")
 def import_sample_input(_: CurrentUser):
     return {"name": "HQ Network (imported)", "configs": import_sample.CONFIGS,

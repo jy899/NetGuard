@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from backend.core.errors import NetGuardError
 from backend.services import analysis_service, demo_topology, fix_engine, impact_engine, network_service, risk_engine, validation_engine
 from backend.services.forwarding import FlowAnalyzer
-from backend.services.network_model import load_model
+from backend.services.network_model import load_model, presentation_only
 from backend.services.rules import RULES, SEVERITY_ORDER
 from backend.services.analysis_checks import advisories, coverage_notes
 
@@ -128,6 +128,40 @@ def _link_open_changes(db: Session, network_id: int, rows: list[dict]) -> None:
                         (fix.get("device_id"), fix.get("interface_id"), fix.get("change_type"), fix.get("parameters") or {}):
                     fix["change"] = {"id": change.id, "status": change.status}
                     break
+
+
+def _cabling_findings(network, model) -> list[dict]:
+    """Cables the imported lab or project file defines that are no longer in the model.
+
+    Without configurations or traffic tests nothing else would notice a removed cable, so the lab file is the design
+    baseline: a missing cable is reported, and a device it leaves with no cable at all is a definite fault."""
+    baseline = (network.metadata_json or {}).get("lab_cables")
+    if not baseline:
+        return []
+    present = {frozenset({l.a_dev, l.b_dev}) for l in model.links.values()}
+    had = {did for c in baseline for did in (c["a"], c["b"])}
+    isolated = {did for did in had if did in model.devices and not model.links_of(did)}
+    out = []
+    for cable in baseline:
+        a, b = cable["a"], cable["b"]
+        if a not in model.devices or b not in model.devices or frozenset({a, b}) in present:
+            continue
+        name_a, name_b = model.device(a).name, model.device(b).name
+        cut_off = [model.device(d).name for d in (a, b) if d in isolated]
+        out.append({
+            "code": "cable-removed", "severity": "HIGH" if cut_off else "MEDIUM", "device_ids": [a, b],
+            "detail": f"Cable {name_a} {cable.get('a_port') or '?'} ↔ {name_b} {cable.get('b_port') or '?'} from the "
+                      f"imported file is missing." + (f" {', '.join(cut_off)} now has no connection at all." if cut_off else ""),
+            "next_step": "Reconnect it (Connect To…), or if the change is intended press Accept current cabling.",
+        })
+    return out
+
+
+def _logical_link_count(db: Session, network_id: int) -> int:
+    """Links drawn on the map that are not cables (same subnet, route hop): shown, but never analysed."""
+    from backend.models import Link
+
+    return sum(1 for link in db.scalars(select(Link).where(Link.network_id == network_id)) if presentation_only(link))
 
 
 def run_health_check(db: Session, network_id: int, verify_fixes: bool = True) -> dict:
@@ -243,6 +277,22 @@ def run_health_check(db: Session, network_id: int, verify_fixes: bool = True) ->
         gaps.append({"code": "configuration", "detail": "Configuration reads are missing" +
                      (": " + ", ".join(missing_reads) if missing_reads else " for this model") + ".",
                      "next_step": next_step})
+    elif not smart:
+        # Any source (lab import, project file, manual model): a router or firewall without a single IP address has
+        # no configuration in the model, so "no fault found" says nothing about it. Switches may run on defaults.
+        unconfigured = sorted(d.name for d in model.devices.values()
+                              if d.is_l3 and not any(i.ip for i in d.interfaces.values()) and not d.routes)
+        if unconfigured:
+            lab = network.source in ("eve-ng", "gns3")
+            gaps.append({"code": "configuration",
+                         "detail": f"No configuration was imported for {len(unconfigured)} router(s) or firewall(s): "
+                                   + ", ".join(unconfigured) + ".",
+                         "next_step": ("Use Collect Configs to read the running configurations from the lab consoles."
+                                       if lab else "Import or enter the device configurations, then analyze again.")})
+    if network.source != "discovery" and model.devices and not flow_rows:
+        gaps.append({"code": "traffic-tests",
+                     "detail": "No required flows and no addressed host pairs: end-to-end connectivity was not checked.",
+                     "next_step": "Add host addressing and required flows (Manage Required Flows), then analyze again."})
     if network.source == "discovery":
         if not model.links:
             gaps.append({"code": "no-links", "detail": "No interface connections have been collected.",
@@ -280,9 +330,10 @@ def run_health_check(db: Session, network_id: int, verify_fixes: bool = True) ->
         elif any(row["ok"] is None for row in flow_rows):
             gaps.append({"code": "unverified-flows", "detail": "One or more required service flows could not be evaluated from the available evidence.",
                          "next_step": "Inspect the missing endpoint or connection evidence and repeat analysis."})
+    cabling = _cabling_findings(network, model)
     incomplete = bool(gaps)
     failing_count = sum(1 for row in flow_rows if row["ok"] is False)
-    status = "issues" if issues or failing_count else "incomplete" if incomplete else "healthy"
+    status = "issues" if issues or failing_count or cabling else "incomplete" if incomplete else "healthy"
     return {
         "network_id": network.id, "network_name": network.name,
         "checked_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds"),
@@ -291,8 +342,10 @@ def run_health_check(db: Session, network_id: int, verify_fixes: bool = True) ->
         "summary": f"Connectivity {status.upper()} · {len(advisory_rows)} security & hygiene advisories",
         "coverage_notes": _legacy_sample_notes(network) + coverage_notes(model, flows) + _inferred_notes(network, model, flow_rows),
         "rules_checked": sum(1 for rule in RULES.values() if rule.category != "advisory"), "devices_checked": len(model.devices), "links_checked": len(model.links),
+        "logical_links": _logical_link_count(db, network_id),
         "issue_count": len(issues), "counts": counts, "issues": issues, "flows": flow_rows,
         "failing_flow_count": failing_count, "unknown_flow_count": sum(1 for f in flow_rows if f["ok"] is None),
+        "cabling_findings": cabling, "cabling_count": len(cabling),
         "analysis_complete": not incomplete,
         "coverage_gaps": gaps,
         "elapsed_ms": int((time.perf_counter() - started) * 1000),

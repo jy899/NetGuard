@@ -43,9 +43,10 @@ def get_summary(db: Session, recent_limit: int = 5) -> DashboardSummary:
         db.scalars(select(Network).order_by(Network.updated_at.desc(), Network.id.desc()).limit(recent_limit))
     )
     records = list(db.scalars(select(AnalysisRecord).order_by(AnalysisRecord.id.desc())))
+    existing = set(db.scalars(select(Network.id)))
     latest_analysis = {}
     for row in records:
-        if row.network_id is not None and row.kind in ("analysis", "report"):
+        if row.network_id in existing and row.kind in ("analysis", "report"):
             latest_analysis.setdefault(row.network_id, row)
     from backend.services import history_service
     activity = [history_service.to_out(row).model_dump(mode="json") for row in records[:10]]
@@ -69,7 +70,8 @@ def get_summary(db: Session, recent_limit: int = 5) -> DashboardSummary:
         saved_assessments=db.scalar(select(func.count(Assessment.id)).where(Assessment.saved.is_(True))) or 0,
         risk_distribution={lvl: sum(1 for v in latest.values() if v == lvl) for lvl in ("LOW", "MEDIUM", "HIGH", "CRITICAL")},
         recent_assessments=_recent_assessments(db),
-        detected_issues=sum(row.summary.get("issue_count", 0) for row in latest_analysis.values()),
+        detected_issues=sum((row.summary or {}).get("issue_count", 0) for row in latest_analysis.values()),
+        analysed_networks=len(latest_analysis),
         analysis_runs=sum(1 for row in records if row.kind == "analysis"), recent_activity=activity[:8],
         devices_by_type={t: by_type.get(t, 0) for t in DEVICE_TYPES},
         recent_networks=[

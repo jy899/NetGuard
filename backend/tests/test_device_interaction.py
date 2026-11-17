@@ -242,6 +242,43 @@ def test_fortigate_import_runs_the_rule_packs(client, auth):
     assert sec and "Telnet management is enabled" in json.dumps(sec), [r["rule_id"] for r in rows]
 
 
+MIKROTIK = """# 2026-11-18 by RouterOS 7.12
+/system identity
+set name=MT-Edge
+/interface ethernet
+set [ find default-name=ether3 ] disabled=yes
+/ip address
+add address=10.0.0.1/24 interface=ether1
+add address=192.168.88.1/24 interface=ether2
+/ip route
+add dst-address=0.0.0.0/0 gateway=10.0.0.254
+/ip service
+set telnet disabled=no
+set www disabled=no
+set ssh disabled=no
+"""
+
+
+def test_mikrotik_export_with_ip_service_section_parses():
+    """Every RouterOS export has an /ip service section; it used to crash the parser."""
+    dev = vendor_parsers.parse(MIKROTIK)
+    assert dev.name == "MT-Edge" and dev.gw == "10.0.0.254"
+    assert (dev.ifs["ether1"].ip, dev.ifs["ether1"].mask) == ("10.0.0.1", "255.255.255.0")
+    assert dev.ifs["ether3"].down
+    assert dev.facts["http_server"] and dev.facts["vty"][0]["transport"] == ["telnet"]
+
+
+def test_mikrotik_import_runs_the_rule_packs(client, auth):
+    response = client.post("/api/networks/import", headers=auth, json={"name": "MikroTik", "configs": MIKROTIK})
+    assert response.status_code == 200, response.text
+    nid = response.json()["network_id"]
+    device = client.get(f"/api/networks/{nid}/topology", headers=auth).json()["devices"][0]
+    assert device["name"] == "MT-Edge" and device["platform"] == "mikrotik-routeros"
+    report = client.get(f"/api/networks/{nid}/health-check", headers=auth).json()
+    rows = report["issues"] + report.get("advisories", [])
+    assert any(r["rule_id"] == "SEC002" for r in rows), [r["rule_id"] for r in rows]
+
+
 def test_driver_matrix_and_detection(client, auth):
     matrix = {row["id"]: row for row in client.get("/api/drivers", headers=auth).json()}
     assert {"cisco-ios", "cisco-nxos", "fortios", "pfsense", "aruba-os-switch", "aruba-cx", "edgeos", "unifi", "ruijie-os",

@@ -1,7 +1,46 @@
 """Config import: Cisco IOS output -> network model, checked against the hand-built demo network."""
 import pytest
 
-from backend.services.config_import import ifname, parse_configs
+from backend.core.errors import ValidationFailed
+from backend.services.config_import import ifname, interface_range, parse_configs
+
+
+def test_interface_range_expands_dash_ranges_and_comma_lists():
+    assert interface_range("GigabitEthernet1/0/1 - 3 , GigabitEthernet1/0/24") == \
+        ["Gi1/0/1", "Gi1/0/2", "Gi1/0/3", "Gi1/0/24"]
+    assert interface_range("fa0/1-2,fa0/2") == ["Fa0/1", "Fa0/2"]  # duplicates collapse
+    assert interface_range("Vlan10 - 11") == ["Vlan10", "Vlan11"]
+    for bad in ("macro UPLINKS", "Gi1/0/9 - 2", "Gi1/0/1 - 9999", "1/0/1 - 4"):
+        with pytest.raises(ValueError):
+            interface_range(bad)
+
+
+def test_interface_range_block_applies_every_subcommand_to_each_port():
+    devs, warn = parse_configs("""hostname SW1
+vlan 10
+interface range GigabitEthernet1/0/1 - 12
+ switchport mode access
+ switchport access vlan 10
+ shutdown
+interface range Gi1/0/23 - 24
+ switchport mode trunk
+ switchport trunk native vlan 99
+interface Vlan10
+ ip address 10.10.10.2 255.255.255.0
+""")
+    ifs = devs["SW1"].ifs
+    access = [ifs[f"Gi1/0/{n}"] for n in range(1, 13)]
+    assert all(i.mode == "access" and i.vlan == 10 and i.down for i in access)
+    assert all(ifs[f"Gi1/0/{n}"].mode == "trunk" and ifs[f"Gi1/0/{n}"].native == 99 for n in (23, 24))
+    assert ifs["Vlan10"].ip == "10.10.10.2" and not ifs["Vlan10"].down  # the range block ended at the next interface
+    assert not any(name.lower().startswith("range") for name in ifs) and not warn
+
+
+def test_unreadable_interface_range_is_reported_not_guessed():
+    with pytest.raises(ValidationFailed, match="macros are not modelled"):
+        parse_configs("hostname SW1\ninterface range macro UPLINKS\n shutdown\n")
+    devs, warn = parse_configs("hostname SW1\ninterface range macro UPLINKS\n shutdown\n", lenient=True)
+    assert devs["SW1"].ifs == {} and "macros are not modelled" in warn[0]
 
 
 def test_ifname_normalises_long_short_and_cdp_forms():

@@ -36,6 +36,30 @@ def ifname(raw: str) -> str:
     return canonical_name(raw, "cisco-ios")
 
 
+RANGE_MAX = 512  # interfaces one `interface range` line may expand to
+_RANGE_ITEM = re.compile(r"^([A-Za-z][A-Za-z-]*)\s*((?:\d+/)*)(\d+)\s*(?:-\s*(\d+))?$")
+
+
+def interface_range(spec: str, platform: str = "cisco-ios") -> list[str]:
+    """Names in an IOS `interface range` list: 'Gi1/0/1 - 12 , Gi1/0/24' -> Gi1/0/1 ... Gi1/0/12, Gi1/0/24."""
+    if spec.split()[0].lower() == "macro":
+        raise ValueError("interface range macros are not modelled")
+    names: list[str] = []
+    for part in spec.split(","):
+        m = _RANGE_ITEM.match(part.strip())
+        if not m:
+            raise ValueError(f"interface range item '{part.strip()}' is not recognised")
+        kind, slot, first, last = m.group(1), m.group(2), int(m.group(3)), int(m.group(4) or m.group(3))
+        if last < first or len(names) + last - first + 1 > RANGE_MAX:
+            raise ValueError(f"interface range '{part.strip()}' is invalid or longer than {RANGE_MAX} ports")
+        for number in range(first, last + 1):
+            raw = f"{kind}{slot}{number}"
+            name = raw if platform == "frr" else ifname(raw)
+            if name not in names:
+                names.append(name)
+    return names
+
+
 @dataclass
 class Iface:
     name: str
@@ -221,6 +245,7 @@ def _parse_configs(text: str, lenient: bool = False) -> tuple[dict[str, Dev], li
     devs: dict[str, Dev] = {}
     warn: list[str] = []
     dev = ctx = None  # ctx: ("if", Iface) | ("acl", name, standard) | ("ospf",) | ("vlan", id) | ("cdp",)
+    range_ifs: list[Iface] | None = None  # the interfaces of an open `interface range` block
     frr = False  # FRRouting prints "frr version" before its hostname line
     for raw in text.splitlines():
         line = raw.rstrip()
@@ -235,6 +260,7 @@ def _parse_configs(text: str, lenient: bool = False) -> tuple[dict[str, Dev], li
             if frr:
                 dev.platform, frr = "frr", False
             ctx = ("cdp",) if re.search(r"[#>]\s*sh(ow)?\s+cdp\s+nei", s) else None
+            range_ifs = None
             continue
         if dev is None:
             continue
@@ -245,6 +271,16 @@ def _parse_configs(text: str, lenient: bool = False) -> tuple[dict[str, Dev], li
             _cdp(dev, s)
             continue
         try:
+            if range_ifs is not None and line.startswith(" "):
+                for iface in range_ifs:  # a sub-command of `interface range` applies to every port in the range
+                    _parse_line(dev, ("if", iface), line, s, warn)
+                continue
+            range_ifs = None
+            block = re.match(r"^interface\s+range\s+(.+)$", s, re.I)
+            if block:
+                ctx = None
+                range_ifs = [dev.ifs.setdefault(n, Iface(n)) for n in interface_range(block.group(1), dev.platform)]
+                continue
             ctx = _parse_line(dev, ctx, line, s, warn)
         except (ValueError, IndexError) as exc:
             if not lenient:

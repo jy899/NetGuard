@@ -13,6 +13,7 @@ User edits (names, interface settings, positions) are preserved exactly as the l
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 
 from sqlalchemy import select
@@ -26,7 +27,7 @@ UNKNOWN_PORT = "Unknown Port"
 DISCOVERED_KINDS = ("lldp", "cdp", "mac", "subnet", "stp", "wireless", "segment", "route")
 WIRELESS_PORT = __import__("re").compile(r"wlan|wi-?fi|radio|^ath\d|^wl\d|dot11|wireless|ssid|^ra\d|^rai\d", __import__("re").I)
 _TECHNIQUE_LABELS = {
-    "arp": "ARP", "icmp": "ICMP", "oui": "MAC vendor (OUI)", "dns": "DNS", "netbios": "NetBIOS", "mdns": "mDNS",
+    "segment-gateway": "Routed segment probe", "arp": "ARP", "icmp": "ICMP", "oui": "MAC vendor (OUI)", "dns": "DNS", "netbios": "NetBIOS", "mdns": "mDNS",
     "tcp-banner": "Service scan", "tls-cert": "TLS certificate", "passive-lldp": "Passive LLDP (sensor port)",
     "snmpv3-engine": "SNMPv3 engine discovery", "traceroute": "Traceroute", "system-info": "System information",
     "interface-table": "Interface table", "vlan-table": "VLAN table", "lldp-table": "LLDP neighbour table",
@@ -71,6 +72,29 @@ def detected_methods(device: Device, facts: dict) -> tuple[list[str], list[str]]
         not_offered.append("SNMPv1 — not used. SNMPv2c is cleartext: only a read-only community you supply is used, "
                            "and community strings are never guessed")
     return [m for m in METHOD_ORDER if m in methods], not_offered
+
+
+def login_options(device: Device, facts: dict) -> tuple[list[str], dict[str, str]]:
+    """Every login method an infrastructure device can be asked for, with why each was or was not seen.
+
+    A credential-free scan can miss SSH on a filtered or non-standard port and SNMPv3 behind an access list, so the
+    engineer may still choose them (the attempt then tells). Saved profiles are only tried automatically on the
+    methods the scan actually saw (facts["methods"]), so a closed port never turns into a failed login."""
+    if device.device_type not in ("firewall", "switch", "router"):
+        return [], {}
+    services = [str(s) for s in facts.get("open_services", [])]
+    ssh = next((s for s in services if s.upper().startswith("SSH")), None)
+    notes = {
+        "ssh": f"{ssh} answered during the scan." if ssh else
+               "TCP 22 did not answer during the scan (filtered, disabled or on another port). Enter the SSH port if it is not 22.",
+        "snmpv3": "An SNMPv3 engine answered on UDP 161." if facts.get("snmpv3") else
+                  "No SNMPv3 engine answered (UDP 161 filtered or SNMPv3 not enabled); you can still try it.",
+        "snmpv2c": "Cleartext and read-only: only a community string you supply is used; it is never guessed.",
+    }
+    return list(METHOD_ORDER_LOGIN), notes
+
+
+METHOD_ORDER_LOGIN = ("ssh", "snmpv3", "snmpv2c")  # most secure first: SNMPv2c is the last resort
 
 
 def fuse(db: Session, network: Network) -> None:
@@ -217,6 +241,7 @@ def fuse(db: Session, network: Network) -> None:
                             for site in probe.get("web-portal", {}).get("portals", [])][:8]
         facts["mac"] = probe.get("arp", {}).get("mac")
         facts["methods"], facts["not_offered"] = detected_methods(dev, facts)
+        facts["login_methods"], facts["method_notes"] = login_options(dev, facts)
         facts["can_login"] = bool(facts["methods"])
         facts["gateway"] = ip in gateway_ips
         provenance = []
@@ -738,6 +763,36 @@ def _inference_tiers(network, devices, ip_dev, facts_of, by_subject, obs, reads,
             f"{dev.name} ({dev_ip}) is in {net}, the subnet of {owner.name} {row.name} ({row.ip_address})."],
             ["Switch port (a MAC address table read on that subnet's switch)"]))
 
+    # 5b. routed segments found by gateway probing (inside the authorised scope): the segment's gateway serves the
+    # hosts swept in it, and is reached from this computer's gateway. Logical links: drawn, never analysed as cables.
+    for o in obs:
+        if o["technique"] != "segment-gateway":
+            continue
+        row = (o["facts"] or {}).get("segment") or {}
+        seg_gw = ip_dev.get(row.get("ip"))
+        try:
+            seg_net = _ipa.IPv4Network(row.get("cidr"))
+        except (TypeError, ValueError):
+            continue
+        if seg_gw is None:
+            continue
+        for dev_ip, dev in ip_dev.items():
+            if dev.id == seg_gw.id or any(dev.id in p for p in pairs):
+                continue
+            try:
+                inside = _ipa.IPv4Address(dev_ip) in seg_net
+            except ValueError:
+                continue
+            if inside:
+                add(_link(network.id, seg_gw, None, dev, endpoint_iface(dev, None), "segment", "Logical", 0.35, [
+                    f"{dev.name} answered in the routed segment {seg_net}, whose gateway {seg_gw.name} ({row['ip']}) answered the segment probe."],
+                    ["Switch port (a MAC address table read in that VLAN)"]))
+        if gateway_dev is not None and gateway_dev.id != seg_gw.id and frozenset({gateway_dev.id, seg_gw.id}) not in pairs:
+            add(_link(network.id, gateway_dev, None, seg_gw, None, "route", "Logical", 0.3, [
+                f"{seg_gw.name} ({row['ip']}) is reached through {gateway_dev.name}, this network's gateway "
+                f"(it may be another interface of the same device: authenticate it to confirm)."],
+                ["Routing table or interface list of the gateway"]))
+
     # 6. traceroute: consecutive layer-3 hops present in the discovery
     path = next((o["facts"].get("path") for o in obs if o["technique"] == "traceroute" and o["facts"].get("path")), None)
     if path:
@@ -764,6 +819,8 @@ def _layout(devices, discovery, ip_dev, links, gateway_ips) -> None:
     def level(dev) -> int:
         if dev.id in gateway_ids:
             return 1
+        if dev.device_type in ("firewall", "router"):
+            return 2  # another router or a routed segment's gateway: below the gateway, above its own hosts
         if is_infrastructure(dev, facts_of(dev)) and dev.device_type == "switch":
             switch_nb = [n for n in neighbours[dev.id] if devices[n].device_type == "switch" and not is_access_point(facts_of(devices[n]))]
             return 2 if (neighbours[dev.id] & gateway_ids) or len(switch_nb) >= 2 else 3
@@ -782,28 +839,64 @@ def _layout(devices, discovery, ip_dev, links, gateway_ips) -> None:
         children[parent].append(child)
     linked = {did for did in levels if neighbours[did]}
     movable = {did for did in levels if discovery[str(did)].get("position_source", "auto") == "auto"}
-    cursor = [0.0]
+    # Endpoints under one device wrap into a grid (one row up to 6, then about twice as wide as tall, at most 10
+    # columns) so a /24 of PCs does not become one row thousands of pixels wide.
+    cell_w, cell_h, level_gap, sibling_gap = 190, 150, 200, 110
 
-    def place(did, depth):
+    def columns(count: int) -> int:
+        return max(count, 1) if count <= 6 else min(10, math.ceil(math.sqrt(count * 2.4)))
+
+    def split(did):
         kids = sorted((c for c in children.get(did, []) if c in linked), key=lambda c: (levels[c], c))
-        xs = [place(c, depth + 1) for c in kids]
-        if xs:
-            x = (min(xs) + max(xs)) / 2
-        else:
-            x = cursor[0]
-            cursor[0] += 190
+        leaves = [c for c in kids if levels[c] == 4 and not [k for k in children.get(c, []) if k in linked]]
+        return [c for c in kids if c not in leaves], leaves
+
+    width: dict[int, float] = {}
+
+    def measure(did) -> float:
+        branches, leaves = split(did)
+        branch_w = sum(measure(c) for c in branches) + sibling_gap * max(0, len(branches) - 1)
+        width[did] = max(cell_w, columns(len(leaves)) * cell_w if leaves else 0, branch_w)
+        return width[did]
+
+    def put(did, x, y):
         if did in movable:
-            devices[did].x_position, devices[did].y_position = x, depth * 200
-        return x
+            devices[did].x_position, devices[did].y_position = x, y
+
+    def place(did, left, top):
+        branches, leaves = split(did)
+        centre = left + width[did] / 2
+        put(did, centre, top)
+        cols = columns(len(leaves))
+        for index, leaf in enumerate(leaves):
+            row, col = divmod(index, cols)
+            in_row = min(cols, len(leaves) - row * cols)
+            put(leaf, centre - in_row * cell_w / 2 + col * cell_w + cell_w / 2, top + level_gap + row * cell_h)
+        rows = math.ceil(len(leaves) / cols) if leaves else 0
+        child_top = top + level_gap + ((rows - 1) * cell_h + level_gap if rows else 0)
+        branch_w = sum(width[c] for c in branches) + sibling_gap * max(0, len(branches) - 1)
+        cursor = left + (width[did] - branch_w) / 2
+        for child in branches:
+            place(child, cursor, child_top)
+            cursor += width[child] + sibling_gap
 
     roots = sorted((did for did in linked if did not in parents), key=lambda did: (levels[did], did))
-    for root in roots:
-        place(root, levels[root] - 1 if levels[root] > 1 else 0)
+    # Linked endpoints with no device above them (for example two PCs joined to each other) share one grid.
+    lone = [did for did in roots if levels[did] == 4 and not [k for k in children.get(did, []) if k in linked]]
+    offset = 0.0
+    for root in (r for r in roots if r not in lone):
+        measure(root)
+        place(root, offset, (levels[root] - 1 if levels[root] > 1 else 0) * level_gap)
+        offset += width[root] + sibling_gap * 2
+    wrap_lone = columns(len(lone))
+    for index, did in enumerate(lone):
+        put(did, offset + (index % wrap_lone) * cell_w, 3 * level_gap + (index // wrap_lone) * cell_h)
     bottom = max((devices[did].y_position for did in linked), default=-200) + 230
+    wrap = columns(len([did for did in levels if did not in linked]))
     unlinked = sorted((did for did in levels if did not in linked), key=lambda did: (levels[did], did))
     for index, did in enumerate(unlinked):
         if did in movable:
-            devices[did].x_position, devices[did].y_position = (index % 6) * 190, bottom + (index // 6) * 160
+            devices[did].x_position, devices[did].y_position = (index % wrap) * cell_w, bottom + (index // wrap) * cell_h
         discovery[str(did)]["unknown_row"] = True
     for did in linked:
         discovery[str(did)]["unknown_row"] = False

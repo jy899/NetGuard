@@ -24,11 +24,11 @@ import {
   nodeId,
   syncGraph,
 } from "../topology/graph.js";
-import { renderConnections, renderDevice, renderLink, renderNoNetwork, renderOverview } from "../topology/panel.js";
+import { isMonitoredEndpoint, renderConnections, renderDevice, renderLink, renderNoNetwork, renderOverview } from "../topology/panel.js";
 import { clearTopology, linksForDevice, loadTopology, store } from "../topology/store.js";
 import { environmentLabel } from "../evidence-view.js";
 import { isSmartDiscovery, openAuthentication, renderReport } from "../discovery/discovery-flow.js";
-import { openPortClients, openPortals, openTerminal } from "../topology/console.js";
+import { openPortClients, openPortals, openTerminal, openUrl } from "../topology/console.js";
 
 const LAST_NETWORK_KEY = "netguard.lastNetwork";
 
@@ -97,6 +97,40 @@ function updateDiscoveryStatus() {
   if (!banner) return;
   banner.classList.toggle("d-none", !discovered);
   if (discovered) renderSmartBanner(banner, network);
+}
+
+// ------------------------------------------------------------ up/down monitoring of discovered devices
+const MONITOR_INTERVAL_MS = 60000;
+
+async function checkReachability({ quiet = true } = {}) {
+  const network = store.network;
+  if (!isDiscoveredNetwork(network) || network.is_simulated || !(state.user?.permissions || []).includes("discovery.run")) return;
+  if (document.hidden || state.monitorBusy) return;
+  state.monitorBusy = true;
+  try {
+    const result = await api.post(`/discovery/${network.id}/reachability`, {});
+    if (store.network?.id !== network.id) return;
+    const meta = store.network.metadata_json || (store.network.metadata_json = {});
+    const facts = meta.discovery || (meta.discovery = {});
+    Object.entries(result.devices || {}).forEach(([id, row]) => { (facts[id] || (facts[id] = {})).reachability = row; });
+    meta.reachability = { checked: result.checked, up: result.up, down: result.down, not_checked: result.not_checked };
+    syncGraph(state.cy, store);
+    updateDiscoveryStatus();
+    if (state.selection?.kind === "device") renderPanel();
+    if (!quiet) toast(`Up/down check: ${result.up} up, ${result.down} down${result.not_checked ? `, ${result.not_checked} not checked` : ""}.`, result.down ? "warning" : "success");
+  } catch (exc) {
+    if (!quiet) toast(exc.message, "danger");
+  } finally {
+    state.monitorBusy = false;
+  }
+}
+
+function startMonitoring() {
+  clearInterval(state.monitorTimer);
+  state.monitorTimer = null;
+  if (!isDiscoveredNetwork(store.network) || store.network.is_simulated) return;
+  checkReachability();
+  state.monitorTimer = setInterval(() => checkReachability(), MONITOR_INTERVAL_MS);
 }
 
 function renderSmartBanner(banner, network) {
@@ -987,6 +1021,7 @@ async function openNetwork(networkId) {
   await loadAppliedFixes();
   renderPanel();
   await fitWorkspaceAfterLayout();
+  startMonitoring();
   return true;
 }
 
@@ -1145,7 +1180,9 @@ function bindCanvas() {
     // Not while connecting devices (two quick taps on two nodes) or while a dialog is open.
     if (state.connect.active || Date.now() - (state.lastConnectTap || 0) < 800 || document.querySelector(".modal.show")) return;
     const device = store.devices.get(event.target.data("deviceId"));
-    if (device && (device.management_ip || device.access?.console)) openTerminal(device);
+    if (!device) return;
+    if (isDiscoveredNetwork(store.network) && isMonitoredEndpoint(device) && !device.access?.console) { selectDevice(device.id); return; }
+    if (device.management_ip || device.access?.console) openTerminal(device);
   });
   cy.on("tap", (event) => {
     if (event.target !== cy) return;
@@ -1318,6 +1355,11 @@ function bindPanel() {
       case "rerun-health":
         runHealthCheck(target);
         break;
+      case "accept-cabling":
+        api.post(`/networks/${store.network.id}/cabling-baseline`, {})
+          .then((done) => { toast(`Current cabling (${done.cables} cable(s)) is now the baseline.`, "success"); runHealthCheck(target); })
+          .catch((exc) => toast(exc.message, "danger"));
+        break;
       case "show-connections":
         showConnections(Number(target.dataset.deviceId) || null);
         break;
@@ -1326,6 +1368,15 @@ function bindPanel() {
         break;
       case "open-cli":
         openTerminal(device || store.devices.get(Number(target.dataset.deviceId)));
+        break;
+      case "open-cli-at":
+        openTerminal(device || store.devices.get(Number(target.dataset.deviceId)), { transport: target.dataset.transport, port: Number(target.dataset.port) || null });
+        break;
+      case "open-url":
+        openUrl(target.dataset.url, `${(device || store.devices.get(Number(target.dataset.deviceId)))?.name || "Device"} web management`);
+        break;
+      case "check-reachability":
+        checkReachability({ quiet: false });
         break;
       case "open-gui":
         openPortals(device || store.devices.get(Number(target.dataset.deviceId)));

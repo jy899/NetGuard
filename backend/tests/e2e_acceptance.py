@@ -85,15 +85,25 @@ def step(name: str):
 
 def node_point(page: Page, name: str) -> tuple[float, float]:
     expect(page.locator(".modal-backdrop")).to_have_count(0)
+    # Wait until the node stays put for two frames: right after a reload the map can still be fitting or resizing,
+    # and a position read mid-move sends the click onto a neighbouring link.
     return page.evaluate(
         """async (name) => {
-            await new Promise(requestAnimationFrame);
             const cy = window.netguardWorkspace.cy;
-            cy.resize();
-            const node = cy.nodes().filter(n => n.data('label') === name)[0];
-            const box = cy.container().getBoundingClientRect();
-            const p = node.renderedPosition();
-            return [box.left + p.x, box.top + p.y];
+            let last = null;
+            for (let i = 0; i < 90; i++) {
+                await new Promise(requestAnimationFrame);
+                cy.resize();
+                const node = cy.nodes().filter(n => n.data('label') === name)[0];
+                const box = cy.container().getBoundingClientRect();
+                const p = node.renderedPosition();
+                const point = [box.left + p.x, box.top + p.y];
+                if (last && Math.abs(last[0] - point[0]) < 0.5 && Math.abs(last[1] - point[1]) < 0.5 && !cy.animated()) {
+                    return point;
+                }
+                last = point;
+            }
+            return last;
         }""",
         name,
     )
@@ -125,7 +135,13 @@ def select_node(page: Page, name: str):
     x, y = node_point(page, name)
     page.mouse.click(x, y)
     try:
-        expect(page.locator("[data-panel=device-name]")).to_have_text(name)
+        try:
+            expect(page.locator("[data-panel=device-name]")).to_have_text(name, timeout=2500)
+        except AssertionError:
+            page.wait_for_timeout(700)  # longer than the double-click interval, so a second click is not a double-click
+            x, y = node_point(page, name)
+            page.mouse.click(x, y)
+            expect(page.locator("[data-panel=device-name]")).to_have_text(name)
     except AssertionError:
         debug_dir = ROOT / ".test-tmp"
         debug_dir.mkdir(exist_ok=True)

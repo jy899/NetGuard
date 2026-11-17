@@ -157,9 +157,24 @@ function resultLabel(status) {
   return RESULT_LABELS[status] || String(status).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 
+const AUTH_LABELS = {
+  success: "Authenticated", authenticated: "Authenticated", failure: "Login failed", failed: "Login failed",
+  unassigned: "No login saved", required: "Login available (optional)", not_needed: "Not needed",
+  not_offered: "No secure login offered", pending: "Waiting",
+};
+const ENDPOINT_TYPES = new Set(["pc", "laptop", "printer", "phone", "camera", "unknown"]);
+
+// Plain wording for the stored authentication state; endpoints are never logged in to.
+function authLabel(device, facts) {
+  const raw = device.auth_status || device.authentication_status || facts?.classification?.auth || facts?.auth_status || "";
+  const type = device.role || device.device_type || device.type;
+  if (ENDPOINT_TYPES.has(type) && (!raw || raw === "unassigned" || raw === "not_needed")) return "Not needed (endpoint)";
+  return AUTH_LABELS[raw] || (raw ? String(raw).replace(/_/g, " ") : "Not recorded");
+}
+
 function historySummary(summary) {
   if (!summary || typeof summary !== "object") return summary || "";
-  return Object.entries({ device_count: "devices", found: "devices", link_count: "connections", issue_count: "issues", authenticated: "authenticated", failing_flow_count: "failing flows" }).filter(([key]) => summary[key] != null).map(([key, label]) => `${summary[key]} ${label}`).join(" · ");
+  return Object.entries({ device_count: "devices", found: "devices", link_count: "cabled connections", logical_link_count: "logical", cabling_count: "missing cables", issue_count: "issues", authenticated: "authenticated", failing_flow_count: "failing flows" }).filter(([key]) => summary[key] != null && !(["logical_link_count", "cabling_count"].includes(key) && !summary[key])).map(([key, label]) => `${summary[key]} ${label}`).join(" · ");
 }
 
 function description(value) {
@@ -234,7 +249,7 @@ function renderHistory(record) {
     ${analysis.status ? `<div class="alert ${healthy ? 'alert-success' : 'alert-warning'} mt-3" role="status" data-report="health"><strong>${analysisStatus} · ${(analysis.advisories || []).length} security advisories</strong><div class="small mt-1">${flowCount ? `${passingFlows}/${flowCount} required flow checks passed.` : 'No required flow checks are available.'} ${escapeHtml(scopeText(analysis.evidence_scope || environmentLabel(snapshot.network || topology.network || {})))}. Analysis uses the saved model.</div></div>` : ''}
     ${analysis.analysis_complete === false ? '<div class="ng-card ng-card-body mt-3 border-warning" role="status"><strong>Analysis incomplete</strong><p class="small mb-0 mt-1">Some device, interface or connection evidence is unavailable. Unknown results do not establish successful connectivity.</p></div>' : ""}
     ${activityBlock(record)}
-    ${devices.length || !ACTIVITY_KINDS.has(record.kind) ? `<div class="ng-card ng-card-body mt-3"><h2 class="mt-0">Device Inventory (${devices.length})</h2><div class="table-responsive"><table class="table ng-table"><thead><tr><th>Hostname</th><th>IP Address</th><th>Type / Model</th><th>Authentication</th></tr></thead><tbody>${devices.map((device) => `<tr><td>${escapeHtml(device.name || device.hostname || "Unknown")}</td><td class="mono">${escapeHtml(device.management_ip || device.ip || "Unknown")}</td><td>${escapeHtml([deviceLabel(device.role || device.device_type || device.type), device.model].filter(Boolean).join(" · "))}</td><td>${escapeHtml(device.auth_status || device.authentication_status || discovery[device.id]?.auth_status || "Not recorded")}</td></tr>`).join("") || '<tr><td colspan="4">No device inventory in this snapshot.</td></tr>'}</tbody></table></div></div>` : ""}
+    ${devices.length || !ACTIVITY_KINDS.has(record.kind) ? `<div class="ng-card ng-card-body mt-3"><h2 class="mt-0">Device Inventory (${devices.length})</h2><div class="table-responsive"><table class="table ng-table"><thead><tr><th>Hostname</th><th>Management IP</th><th>Type / Model</th><th>Authentication</th></tr></thead><tbody>${devices.map((device) => `<tr><td>${escapeHtml(device.name || device.hostname || "Unknown")}</td><td class="mono">${escapeHtml(device.management_ip || device.ip || "Not set")}</td><td>${escapeHtml([deviceLabel(device.role || device.device_type || device.type), device.model].filter(Boolean).join(" · "))}</td><td>${escapeHtml(authLabel(device, discovery[device.id]))}</td></tr>`).join("") || '<tr><td colspan="4">No device inventory in this snapshot.</td></tr>'}</tbody></table></div></div>` : ""}
     ${links.length ? `<div class="ng-card ng-card-body mt-3"><h2 class="mt-0">Interface Connections</h2><p class="small text-muted-ng">Discovery evidence records the captured snapshot. Reviewed configuration changes apply to the stored model evaluated in this report.</p><div class="table-responsive"><table class="table ng-table"><thead><tr><th>Source</th><th>Destination</th><th>Relationship</th><th>Captured evidence / Confidence</th></tr></thead><tbody>${links.map((link) => `<tr><td class="mono">${escapeHtml(endpoint(link, true))}</td><td class="mono">${escapeHtml(endpoint(link, false))}</td><td>${escapeHtml(link.connection_type || link.kind || "Unknown")} · ${escapeHtml(link.discovery_status || "Unknown")}${link.state || link.status ? ` · ${escapeHtml(link.state || link.status)}` : ""}</td><td>${escapeHtml(description(link.evidence || link.discovery_evidence) || "No discovery evidence recorded")}<div class="small text-muted-ng">${link.confidence == null ? "Unknown confidence" : `${Math.round(link.confidence * 100)}% confidence`}</div></td></tr>`).join("")}</tbody></table></div></div>` : ""}
     ${analysis.issues ? `<div class="ng-card ng-card-body mt-3"><h2 class="mt-0">Analysis Findings (${analysis.issues.length})</h2>${analysis.issues.map(diagnosticIssue).join("") || `<p class="mb-0 small">${analysis.analysis_complete === false ? "Evaluated rules found no confirmed issue. The analysis remains incomplete because required evidence is missing." : "No issues detected by the evaluated rules."}</p>`}</div>` : ""}
     ${(analysis.advisories || []).length ? `<div class="ng-card ng-card-body mt-3" data-report="advisories"><h2 class="mt-0">Security &amp; hygiene advisories (${analysis.advisories.length})</h2><p class="small text-muted-ng">Advisories do not change connectivity status.</p>${advisoriesBlock(analysis.advisories)}</div>` : ""}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import http.cookiejar
 import json
+import re
 import ssl
 import urllib.error
 import urllib.parse
@@ -145,19 +146,39 @@ def _port(name: str | None, platform: str | None) -> str | None:
     return canonical_name(name, "cisco-ios") if name and platform == "cisco-ios" else name
 
 
-def _kind(template: str | None, image: str | None = None, node_type: str | None = None) -> str:
+# A host's own name says whether it is a user PC or a server; the image ("linux") does not.
+_PC_NAME = re.compile(r"(^|[^a-z])(pc|laptop|desktop|workstation|client|user)(\d|[^a-z]|$)", re.I)
+_SERVER_NAME = re.compile(r"(^|[^a-z])(srv|server|dns|dhcp|db|ftp|mail|ntp|erp|web)(\d|[^a-z]|$)", re.I)
+_DESKTOP_IMAGES = ("slax", "kali", "mint", "lubuntu", "xubuntu", "desktop")
+
+
+# Network operating system images: checked before "linux", since Cisco IOL images are named i86bi-linux-l3/-l2.
+_ROUTER_IMAGES = ("iol", "i86bi", "vios", "iosv", "csr", "c8000", "cat8", "c7200", "c3725", "c3745", "dynamips", "iou",
+                  "xrv", "veos", "vmx", "mikrotik", "routeros", "vyos", "frr", "junos", "openwrt")
+_SWITCH_IMAGES = ("l2", "switch", "nxos", "cat9", "cat3", "cat2", "aruba", "ethernet_switch", "cumulus")
+
+
+def _kind(template: str | None, image: str | None = None, node_type: str | None = None, name: str | None = None) -> str:
     text = " ".join(x for x in (template, image, node_type) if x).lower()
-    if any(k in text for k in ("vpcs", "win", "desktop", "pc", "webterm", "docker")):
-        return "pc"
-    if any(k in text for k in ("asa", "forti", "paloalto", "pfsense", "firewall", "srx")):
+    if any(k in text for k in ("asa", "forti", "paloalto", "pfsense", "firewall", "srx", "opnsense")):
         return "firewall"
-    if any(k in text for k in ("l2", "switch", "nxos", "cat", "aruba", "ethernet_switch")):
+    if any(k in text for k in _SWITCH_IMAGES) and not any(k in text for k in ("vpcs", "webterm")):
         return "switch"
-    if any(k in text for k in ("linux", "ubuntu", "server", "alpine", "debian")):
-        return "server"
-    if any(k in text for k in ("cloud", "nat", "pnet")):
+    if any(k in text for k in _ROUTER_IMAGES):
+        return "router"
+    if any(k in text for k in ("vpcs", "win", "desktop", "pc", "webterm", "docker")):
+        kind = "pc"
+    elif any(k in text for k in ("linux", "ubuntu", "server", "alpine", "debian")):
+        kind = "pc" if any(k in text for k in _DESKTOP_IMAGES) else "server"
+    elif any(k in text for k in ("cloud", "nat", "pnet")):
         return "internet"
-    return "router"
+    else:
+        return "router"
+    if name and _PC_NAME.search(name):
+        return "pc"
+    if name and _SERVER_NAME.search(name):
+        return "server"
+    return kind
 
 
 # ------------------------------------------------------------------ EVE-NG
@@ -210,7 +231,7 @@ class EveNgClient:
         membership: dict[str, list[tuple[str, str]]] = {}
         for nid, n in nodes_raw.items():
             node = LabNode(ref=str(n.get("id", nid)), name=str(n.get("name") or f"node{nid}"),
-                           kind=_kind(n.get("template"), n.get("image"), n.get("type")), template=n.get("template"),
+                           kind=_kind(n.get("template"), n.get("image"), n.get("type"), n.get("name")), template=n.get("template"),
                            console=n.get("url") if str(n.get("url", "")).startswith("telnet://") else None,
                            status="running" if str(n.get("status")) in ("2", "3") else "stopped",
                            platform=_platform(n.get("template"), n.get("image"), n.get("type")),
@@ -306,7 +327,7 @@ def gns3_topology(project_id: str, name: str, nodes_raw: list[dict], links_raw: 
         nodes[n["node_id"]] = LabNode(
             ref=n["node_id"], name=n.get("name") or n["node_id"][:8],
             kind="internet" if node_type in ("cloud", "nat") else "switch" if bridge else
-            _kind(props.get("platform") or n.get("name"), None, node_type),
+            _kind(props.get("platform") or n.get("name"), None, node_type, n.get("name")),
             template=node_type, console=None if bridge else console,
             status="running" if n.get("status") == "started" else "stopped",
             interfaces=[_port(p.get("short_name") or p.get("name"), platform) for p in n.get("ports", []) if p.get("name")],

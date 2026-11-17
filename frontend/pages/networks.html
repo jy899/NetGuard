@@ -63,6 +63,8 @@
                       <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="scan-follow" checked><label class="form-check-label small" for="scan-follow">Scan other VLANs and subnets my routers report</label></div></div>
                     <div class="col-md-3"><label class="form-label small" for="scan-excluded">Exclude</label><input id="scan-excluded" class="form-control form-control-sm mono" placeholder="192.168.1.5, 192.168.1.200/29" maxlength="600"></div>
                     <div class="col-md-3"><label class="form-label small" for="scan-untrusted">Untrusted segments</label><input id="scan-untrusted" class="form-control form-control-sm mono" placeholder="192.168.50.0/24" maxlength="600"></div>
+                    <div class="col-md-6"><label class="form-label small" for="scan-traverse">Routed scope to traverse (optional)</label><input id="scan-traverse" class="form-control form-control-sm mono" placeholder="10.1.0.0/16" maxlength="43" aria-describedby="scan-traverse-help">
+                      <div class="form-text" id="scan-traverse-help">Other VLANs behind the gateway: every /24 inside this range whose .1 or .254 answers is swept too (at most a /16, 16 segments per scan). Leave empty to stay on the range above.</div></div>
                   </div></details>
                 <p class="small text-muted-ng mt-2 mb-0" id="scan-note">Read-only. Scan only networks you are allowed to scan.</p>
                 <div class="alert alert-danger small py-2 mt-2 mb-0 d-none" id="scan-error" role="alert"></div>

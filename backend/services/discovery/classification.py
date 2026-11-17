@@ -206,13 +206,14 @@ def requests(db: Session, network: Network) -> list[dict]:
     rows.sort(key=lambda r: (r[0], r[1]))
     pending = [(dev, facts) for _, _, dev, facts in rows]
     out = []
+    offered = lambda f: f.get("login_methods") or f["methods"]  # noqa: E731
     for dev, facts in pending:
         reuse = []
         for other, other_facts in pending:
-            shared = [m for m in facts["methods"] if m in other_facts["methods"]]
+            shared = [m for m in offered(facts) if m in offered(other_facts)]
             if other.id == dev.id or not shared:
                 continue
-            reuse.append({"device_id": other.id, "name": other.name, "ip": other_facts["ip"], "methods": other_facts["methods"],
+            reuse.append({"device_id": other.id, "name": other.name, "ip": other_facts["ip"], "methods": offered(other_facts),
                           "preselected": ctx.infra(other) and other.id not in set(network.metadata_json.get("discovery_session", {}).get("skipped", []))})
         out.append({
             "device_id": dev.id, "name": dev.name, "ip": facts["ip"], "type": dev.device_type,
@@ -220,7 +221,11 @@ def requests(db: Session, network: Network) -> list[dict]:
             "reason": f"{dev.name} answered with secure management services, but credential-free discovery cannot read its "
                       "configuration or neighbour tables.",
             "gains": facts["classification"]["gains"], "important": any(g["important"] for g in facts["classification"]["gains"]),
-            "methods": facts["methods"], "not_offered": facts.get("not_offered", []), "reuse_candidates": reuse,
+            # Methods the scan saw come first; the others stay selectable with the reason they were not seen.
+            # SNMPv2c (cleartext) is always the last resort; seen methods come before ones the scan did not see.
+            "methods": sorted(offered(facts), key=lambda m: (m == "snmpv2c", m not in facts["methods"], offered(facts).index(m))),
+            "detected": facts["methods"], "method_notes": facts.get("method_notes", {}),
+            "not_offered": facts.get("not_offered", []), "reuse_candidates": reuse,
             "last_error": facts.get("auth_detail") if facts.get("auth") == "failed" else None,
         })
     return out

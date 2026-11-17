@@ -6,6 +6,7 @@ Recommendation Engine -> Analysis Result
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -190,8 +191,9 @@ def analyze_change(db: Session, change: Change, user: User | None) -> Assessment
     try:
         from backend.services import ai_engine
         ai_engine.record_forecast(db, change, result.get("ai") or {})
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - the advisory forecast record never blocks saving the assessment
+        logging.getLogger("netguard.ai").warning("The AI forecast for change %s was not recorded.", change.id,
+                                                 exc_info=True)
     db.commit()
     db.refresh(assessment)
     return assessment

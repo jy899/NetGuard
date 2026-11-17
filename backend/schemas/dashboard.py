@@ -44,5 +44,6 @@ class DashboardSummary(BaseModel):
     devices_by_type: dict[str, int]
     recent_networks: list[RecentNetwork]
     detected_issues: int = 0
+    analysed_networks: int = 0  # existing networks with at least one analysis; the issue count covers only these
     analysis_runs: int = 0
     recent_activity: list[dict] = []

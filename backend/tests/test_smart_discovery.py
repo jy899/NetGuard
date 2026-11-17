@@ -62,7 +62,7 @@ def health(client, auth, nid):
 
 
 def full_read(client, auth, result):
-    ids = [r["device_id"] for r in result["credential_requests"] if "ssh" in r["methods"]]
+    ids = [r["device_id"] for r in result["credential_requests"] if "ssh" in r["detected"]]
     return authenticate(client, auth, result["network_id"], ids)["result"]
 
 
@@ -166,7 +166,7 @@ def _apply_recommended(client, auth, nid):
 def test_switches_without_the_firewall_report_one_suspected_vlan_fault(client, auth):
     result = scan(client, auth)
     office_policy(client, auth, result)
-    ids = [r["device_id"] for r in result["credential_requests"] if r["type"] == "switch" and "ssh" in r["methods"]]
+    ids = [r["device_id"] for r in result["credential_requests"] if r["type"] == "switch" and "ssh" in r["detected"]]
     authenticate(client, auth, result["network_id"], ids)
     report = health(client, auth, result["network_id"])
     assert [i["rule_id"] for i in report["issues"]] == ["VLAN001"] and report["issues"][0]["certainty"] == "suspected"

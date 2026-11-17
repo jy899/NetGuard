@@ -152,6 +152,7 @@ def _sync(db: Session, user, network: Network, topology: labs.LabTopology, lab: 
     db.flush()
     ifaces = {(i.device_id, i.name): i for i in db.scalars(select(Interface).join(Device)
                                                            .where(Device.network_id == network.id))}
+    cables: list[dict] = []  # the cabling the lab file defines: the baseline a later analysis compares with
     for cable in topology.links:
         a, b = devices.get(cable.a), devices.get(cable.b)
         if a is None or b is None:
@@ -175,12 +176,29 @@ def _sync(db: Session, user, network: Network, topology: labs.LabTopology, lab: 
         db.add(Link(network_id=network.id, source_device_id=a.id, source_interface_id=ia.id if ia else None,
                     destination_device_id=b.id, destination_interface_id=ib.id if ib else None, kind="lab", state="up",
                     confidence=1.0, evidence_json=json.dumps(evidence)))
+        cables.append({"a": a.id, "a_port": cable.a_port, "b": b.id, "b_port": cable.b_port})
     db.flush()
     for ref, text in endpoint_configs.items():
         if not device_state.apply_endpoint(db, devices[ref], text):
             warnings.append(f"{devices[ref].name}: no IPv4 address found in its configuration.")
     meta = dict(network.metadata_json or {})
     meta.update(lab_refreshed_at=_now(), lab_warnings=warnings[:50],
-                startup_configs=len(topology.configs), lab_nodes=len(topology.nodes))
+                startup_configs=len(topology.configs), lab_nodes=len(topology.nodes), lab_cables=cables)
     network.metadata_json = meta
     db.flush()
+
+
+def accept_cabling(db: Session, network: Network) -> dict:
+    """Make the current cables the baseline (after an intended redesign), so removed lab cables stop being reported."""
+    meta = dict(network.metadata_json or {})
+    if "lab_cables" not in meta:
+        raise ValidationFailed("This network was not imported from a lab or project file.")
+    ifname = {i.id: i.name for i in db.scalars(select(Interface).join(Device).where(Device.network_id == network.id))}
+    meta["lab_cables"] = [{"a": l.source_device_id, "a_port": ifname.get(l.source_interface_id),
+                           "b": l.destination_device_id, "b_port": ifname.get(l.destination_interface_id)}
+                          for l in db.scalars(select(Link).where(Link.network_id == network.id))
+                          if l.kind not in ("segment", "route", "logical", "tunnel", "vpn")]
+    meta["lab_cables_accepted_at"] = _now()
+    network.metadata_json = meta
+    db.commit()
+    return {"cables": len(meta["lab_cables"])}

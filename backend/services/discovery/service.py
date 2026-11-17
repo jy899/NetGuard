@@ -13,7 +13,9 @@ has read. It stays inside the authorised range unless the engineer allows follow
 """
 from __future__ import annotations
 
+import copy
 import ipaddress
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -77,7 +79,8 @@ def _now() -> str:
 def scan(db: Session, user, network_range: ipaddress.IPv4Network, name: str | None, authorized: bool,
          excluded: list[str] | None = None, untrusted: list[str] | None = None, auto_credentials: bool = False,
          follow_neighbours: bool = False, max_depth: int = MAX_CRAWL_DEPTH, progress=None,
-         extra_ranges: list[ipaddress.IPv4Network] | None = None) -> Network:
+         extra_ranges: list[ipaddress.IPv4Network] | None = None,
+         traverse_scope: ipaddress.IPv4Network | None = None) -> Network:
     if not authorized:
         raise ValidationFailed("Confirm that you are authorized to scan this address range before starting discovery.")
     if network_range.prefixlen < MAX_PREFIX:
@@ -86,6 +89,11 @@ def scan(db: Session, user, network_range: ipaddress.IPv4Network, name: str | No
         raise ValidationFailed("Choose a unicast IPv4 range to discover.")
     excluded = parse_scope(excluded, "Excluded addresses")
     untrusted = parse_scope(untrusted, "Untrusted segments")
+    if traverse_scope is not None:
+        if traverse_scope.prefixlen < subnets.TRAVERSE_MIN_PREFIX:
+            raise ValidationFailed(f"Limit the routed scope to traverse to at most a /{subnets.TRAVERSE_MIN_PREFIX} (65,536 addresses).")
+        if not network_range.subnet_of(traverse_scope):
+            raise ValidationFailed(f"The routed scope {traverse_scope} must contain the range being scanned ({network_range}).")
     engine = engine_factory(network_range, excluded)
     report = progress or (lambda *_: None)
     try:
@@ -101,12 +109,20 @@ def scan(db: Session, user, network_range: ipaddress.IPv4Network, name: str | No
         probe["timeline"] = list(probe["timeline"]) + [
             {**row, "id": f"{row['id']}-{extra}", "label": f"{row['label']} ({extra})"} for row in more["timeline"]]
     ranges = [str(network_range)] + [str(n) for n in extra_ranges]
+    segments = None
+    if traverse_scope is not None:
+        segments, swept_more = _traverse(engine, traverse_scope, ranges, excluded, probe, report)
+        ranges_swept = ranges + swept_more
+    else:
+        ranges_swept = list(ranges)
     meta = {
         "mode": "live", "live_device_contact": True, "target": str(network_range),
         "method": "smart", "discovery_schema_version": 3, "interface_naming_version": 1,
-        "scope": {"authorised": ranges, "excluded": excluded, "untrusted": untrusted,
-                  "follow_neighbours": bool(follow_neighbours)},
-        "swept": list(ranges),
+        "scope": {"authorised": ranges + ([str(traverse_scope)] if traverse_scope is not None else []),
+                  "excluded": excluded, "untrusted": untrusted, "follow_neighbours": bool(follow_neighbours),
+                  "traverse": str(traverse_scope) if traverse_scope is not None else None},
+        "swept": ranges_swept,
+        **({"segments": segments} if segments is not None else {}),
         "authorization": {"confirmed": True, "by": user.username, "at": _now(), "range": str(network_range)},
         "observations": probe["observations"], "timeline": probe["timeline"], "no_response": probe["no_response"],
         "discovery": {}, "discovery_can_login": [], "discovery_session": dict(SESSION_DEFAULT),
@@ -136,6 +152,49 @@ def scan(db: Session, user, network_range: ipaddress.IPv4Network, name: str | No
         report("credentials", 0, 0, len(discovery))
         crawl(db, user, network, engine, follow_neighbours=follow_neighbours, max_depth=max_depth, progress=report)
     return network
+
+
+def _traverse(engine, scope: ipaddress.IPv4Network, ranges: list[str], excluded: list[str], probe: dict, report) -> tuple[dict, list[str]]:
+    """Routed segments inside the wider scope the engineer authorised: find the /24s whose usual gateway address
+    answers (and this computer's own subnets), then sweep them within the crawl budget. Never leaves the scope."""
+    to_probe = subnets.segments_to_probe(str(scope), ranges, excluded)
+    finder = getattr(engine, "segment_gateways", None)
+    report("segments", 0, len(to_probe), 0)
+    answered = finder(to_probe) if finder and to_probe else {}
+    rows = [{"cidr": cidr, "interface": None, "ip": hit["gateway"], "source": "gateway-probe", "via": hit["via"]}
+            for cidr, hit in sorted(answered.items(), key=lambda kv: ipaddress.IPv4Network(kv[0]))]
+    local = getattr(engine, "local_subnets", None)
+    for cidr in (local() if local else []):
+        net = ipaddress.IPv4Network(cidr, strict=False)
+        if net.subnet_of(scope) and str(net) not in ranges and not any(r["cidr"] == str(net) for r in rows):
+            rows.insert(0, {"cidr": str(net), "interface": "this computer", "ip": None, "source": "local", "via": "local interface"})
+    for row in rows:
+        if row["source"] == "gateway-probe":
+            probe["observations"] = list(probe["observations"]) + [observation(
+                "segment-gateway", row["ip"], {"segment": {k: row[k] for k in ("cidr", "interface", "ip", "source")}},
+                f"{row['ip']} answered ({row['via']}): routed segment {row['cidr']} exists inside the authorised scope {scope}.",
+                simulated=bool(getattr(engine, "simulated", False)))]
+    sweep, left = subnets.plan(rows, [str(scope)], excluded, ranges, False)
+    swept = []
+    for row in sweep:
+        report("segments", len(swept) + 1, len(sweep), 0)
+        try:
+            more = engine_factory(ipaddress.IPv4Network(row["cidr"]), excluded).probe()
+        except Exception as exc:  # noqa: BLE001 — one unreachable segment must not abort the scan
+            left.append({**row, "reason": f"sweep failed: {exc}"})
+            continue
+        swept.append(row["cidr"])
+        probe["observations"] = list(probe["observations"]) + list(more["observations"])
+        probe["no_response"] = list(probe["no_response"]) + list(more["no_response"])
+        hosts = {o["subject"] for o in more["observations"]}
+        probe["timeline"] = list(probe["timeline"]) + [{
+            "id": f"segment-{row['cidr']}", "label": f"Routed segment {row['cidr']}", "count": len(hosts),
+            "detail": (f"Gateway {row['ip']} answered ({row['via']})" if row["ip"] else "This computer is attached to it")
+                      + "; swept with ICMP and TCP (no ARP across a router)."}]
+    summary = {"scope": str(scope), "probed": len(to_probe), "gateways_checked": sum(len(v) for v in to_probe.values()),
+               "answered": rows, "swept": swept, "left_out": left,
+               "note": None if finder else "This discovery engine cannot probe segment gateways."}
+    return summary, swept
 
 
 def _add_devices(db: Session, network: Network, discovery: dict, observations: list[dict]) -> dict:
@@ -242,6 +301,52 @@ def _in_scope(ip: str, meta: dict, follow: bool) -> bool:
     if any(address in ipaddress.IPv4Network(n) for n in scope.get("authorised", [])):
         return True
     return follow and any(address in net for net in PRIVATE_NETS)
+
+
+_TCP_PORT = re.compile(r"TCP (\d+)")
+MONITOR_LIMIT = 1024
+
+
+def reachability(db: Session, network: Network) -> dict:
+    """Up/down check of every discovered device with an address inside the authorised scope (no credentials used).
+
+    Unmanaged endpoints (PCs, laptops) are only monitored this way; infrastructure is also checked here so a
+    switch or firewall that stops answering is visible on the map."""
+    meta = copy.deepcopy(network.metadata_json or {})
+    follow = meta.get("scope", {}).get("follow_neighbours", False)
+    info = meta.setdefault("discovery", {})
+    targets: dict[str, list[int]] = {}
+    owners: dict[str, list[str]] = {}
+    skipped = 0
+    for device in db.scalars(select(Device).where(Device.network_id == network.id).order_by(Device.id)):
+        facts = info.setdefault(str(device.id), {})
+        ip = device.management_ip
+        if not ip or not _in_scope(ip, meta, follow) or len(targets) >= MONITOR_LIMIT:
+            facts["reachability"] = {"state": "not-checked", "via": "no address inside the authorised scope" if ip else "no address"}
+            skipped += 1
+            continue
+        ports = [int(m) for m in _TCP_PORT.findall(" ".join(map(str, facts.get("open_services", []))))]
+        targets.setdefault(ip, sorted(set(ports), key=lambda p: (p not in (443, 22, 80), p)))
+        owners.setdefault(ip, []).append(str(device.id))
+    engine = _engine(network)
+    check = getattr(engine, "reachable", None)
+    answers = check(targets) if check and targets else {}
+    stamp = _now()
+    up = down = 0
+    for ip, ids in owners.items():
+        answer = answers.get(ip, {"state": "unknown", "via": "not checked by this engine"})
+        up += answer["state"] == "up"
+        down += answer["state"] == "down"
+        for did in ids:
+            previous = info[did].get("reachability", {})
+            row = {**answer, "checked": stamp}
+            row["since"] = previous.get("since") if previous.get("state") == answer["state"] else stamp
+            info[did]["reachability"] = row
+    meta["reachability"] = {"checked": stamp, "up": up, "down": down, "not_checked": skipped}
+    network.metadata_json = meta
+    db.commit()
+    return {"checked": stamp, "up": up, "down": down, "not_checked": skipped,
+            "devices": {did: info[did]["reachability"] for did in info if "reachability" in info[did]}}
 
 
 def neighbour_addresses(db: Session, network: Network, follow: bool) -> dict[str, list[str]]:
@@ -443,9 +548,12 @@ def authenticate(db: Session, user, network: Network, data: dict) -> dict:
         facts = discovery.get(str(did))
         if did not in devices or facts is None:
             raise ValidationFailed("A selected device does not belong to this discovery.")
-        if method not in facts.get("methods", []):
+        if method not in facts.get("methods", []) and method not in facts.get("login_methods", []):
             raise ValidationFailed(f"{devices[did].name} does not offer {SECURE_METHODS[method]}.")
     profile = credential_service.profile_for(db, user, data["profile_id"]) if data.get("profile_id") else None
+    # Bulk fallback queue: saved profiles tried in the given order on each device the entered credentials did not open.
+    fallback = [credential_service.profile_for(db, user, pid) for pid in dict.fromkeys(data.get("fallback_profile_ids") or [])]
+    queue_only = profile is None and not (data.get("password") or "") and bool(fallback)
     if profile is not None:
         if (profile.method or "ssh") != method:
             raise ValidationFailed(f"The saved profile '{profile.name}' is for {SECURE_METHODS.get(profile.method or 'ssh')}.")
@@ -456,11 +564,11 @@ def authenticate(db: Session, user, network: Network, data: dict) -> dict:
         protocols = (data.get("snmp_auth_protocol") or "SHA-256", data.get("snmp_priv_protocol") or "AES-128")
         if method == "snmpv2c":
             username = username or "community"
-        if not username or not secret:
-            raise ValidationFailed("Enter a username and password, or choose a saved profile.")
-    if method == "snmpv2c" and not secret:
+        if (not username or not secret) and not queue_only:
+            raise ValidationFailed("Enter a username and password, choose a saved profile, or tick saved profiles to try in order.")
+    if method == "snmpv2c" and not secret and not queue_only:
         raise ValidationFailed("Enter the read-only SNMPv2c community string.")
-    if method == "snmpv3" and (len(secret) < 8 or not priv or len(priv) < 8):
+    if method == "snmpv3" and not queue_only and (len(secret) < 8 or not priv or len(priv) < 8):
         raise ValidationFailed("SNMPv3 authPriv needs authentication and privacy passphrases of at least 8 characters.")
     if method == "snmpv3" and (protocols[0] not in ("SHA-256", "SHA-512") or protocols[1] not in ("AES-128", "AES-256")):
         raise ValidationFailed("Choose SHA-256 or SHA-512 authentication and AES-128 or AES-256 privacy.")
@@ -469,10 +577,35 @@ def authenticate(db: Session, user, network: Network, data: dict) -> dict:
     meta["discovery"] = {key: dict(value) for key, value in meta["discovery"].items()}
     observations = list(meta.get("observations", []))
     outcomes = []
+    ssh_port = data.get("ssh_port") or (profile.port if profile is not None else None)
     for did in ids:
-        ok, detail, observations = _read_device(db, user, engine, devices, meta, observations, did, method, username,
-                                                secret, priv, protocols)
-        outcomes.append({"device_id": did, "name": devices[did].name, "ok": ok, "detail": detail})
+        if queue_only:
+            ok, detail = False, "No credentials entered; trying the saved profiles in order."
+        else:
+            ok, detail, observations = _read_device(db, user, engine, devices, meta, observations, did, method, username,
+                                                    secret, priv, protocols, ssh_port=ssh_port if method == "ssh" else None)
+        used = None
+        if not ok and fallback:
+            offered = set(meta["discovery"][str(did)].get("login_methods") or meta["discovery"][str(did)].get("methods", []))
+            tried = []
+            for candidate in fallback:
+                cmethod = candidate.method or "ssh"
+                if cmethod not in offered:
+                    continue
+                tried.append(candidate.name)
+                cprot = (candidate.snmp_auth_protocol or "SHA-256", candidate.snmp_priv_protocol or "AES-128")
+                ok, cdetail, observations = _read_device(db, user, engine, devices, meta, observations, did, cmethod,
+                                                         candidate.username, candidate.password or "", candidate.priv_password,
+                                                         cprot, ssh_port=candidate.port if cmethod == "ssh" else None)
+                if ok:
+                    used = candidate
+                    detail = f"{cdetail} Opened with the saved profile '{candidate.name}' ({SECURE_METHODS[cmethod]}), tried in queue order."
+                    meta["discovery"][str(did)]["auth_profile"] = candidate.name
+                    break
+            if not ok and tried:
+                detail = f"{detail} Saved profiles tried once each, in order: {', '.join(tried)}. None was accepted."
+        outcomes.append({"device_id": did, "name": devices[did].name, "ok": ok, "detail": detail,
+                         "profile": used.name if used is not None else None})
     meta["observations"] = observations
     network.metadata_json = meta
     db.flush()
@@ -480,16 +613,16 @@ def authenticate(db: Session, user, network: Network, data: dict) -> dict:
     _sync_login_ids(network)
     db.commit()  # the outcome and collected data are kept even if saving a profile fails below
     saved_profile, profile_note = None, None
-    if data.get("remember") and profile is None and any(o["ok"] for o in outcomes):
+    if data.get("remember") and profile is None and not queue_only and any(o["ok"] and not o.get("profile") for o in outcomes):
         saved_profile, profile_note = _remember(db, user, method, username, secret, priv,
                                                 data.get("profile_name"), devices[ids[0]].name, protocols)
     crawled = None
-    if data.get("continue_discovery", True) and any(o["ok"] for o in outcomes):
+    if data.get("continue_discovery", True) and not queue_only and any(o["ok"] and not o.get("profile") for o in outcomes):
         # Continue discovery from what the read revealed (neighbours, ARP, routes), with the same credentials.
         follow = (network.metadata_json or {}).get("scope", {}).get("follow_neighbours", False)
         credential = ScanCredential(method, username, secret, priv, protocols,
                                     name=profile.name if profile is not None else "entered credentials",
-                                    port=profile.port if profile is not None else None)
+                                    port=ssh_port)
         crawled = crawl(db, user, network, engine, follow_neighbours=follow, extra=[credential])
     _persist_evaluation(db, network)
     _history(db, user, network, "Device authentication", {

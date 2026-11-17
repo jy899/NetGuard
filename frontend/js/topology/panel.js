@@ -10,6 +10,73 @@ import { isSmartDiscovery as isDiscoveredNetwork } from "../discovery/discovery-
 
 const L3 = ["router", "firewall"];
 const HOSTS = ["pc", "server"];
+// PCs, laptops, phones and guests are unmanaged endpoints: monitored Up/Down only, no CLI or web login offered.
+const MANAGED_ENDPOINT_ROLES = ["printer", "camera", "ap"];
+export const isMonitoredEndpoint = (device) => device.device_type === "pc" && !MANAGED_ENDPOINT_ROLES.includes(device.role);
+const HTTP_PORTS = [80, 8080, 8000, 8081];
+const WEB_PORT_SET = [80, 443, 4443, 8000, 8080, 8081, 8443, 9443, 10443];
+
+/** One-click management entry points from what discovery saw: verified web portals, web ports, SSH and Telnet. */
+export function managementAccess(device, facts) {
+  const ip = device.management_ip;
+  if (!ip || !facts) return [];
+  const entries = [];
+  const seen = new Set();
+  const host = ip.includes(":") ? `[${ip}]` : ip;
+  (facts.portals || []).forEach((p) => {
+    if (!p.url || seen.has(p.url)) return;
+    seen.add(p.url);
+    entries.push({ kind: "web", url: p.url, label: p.vendor ? `${p.vendor} ${p.product || ""}`.trim() : (p.title || "Web GUI"), verified: true, note: p.self_signed ? "self-signed certificate" : "" });
+  });
+  const ports = [];
+  (facts.open_services || []).forEach((service) => {
+    const match = /^(.*?)\s*\(TCP (\d+)\)/.exec(String(service));
+    if (match) ports.push({ name: match[1], port: Number(match[2]) });
+  });
+  ports.forEach(({ port }) => {
+    if (!WEB_PORT_SET.includes(port)) return;
+    const scheme = HTTP_PORTS.includes(port) ? "http" : "https";
+    const url = `${scheme}://${host}${(scheme === "http" && port === 80) || (scheme === "https" && port === 443) ? "" : `:${port}`}`;
+    const already = [...seen].some((u) => u.replace(/\/$/, "") === url || u.startsWith(`${url}/`));
+    if (already) return;
+    seen.add(url);
+    entries.push({ kind: "web", url, label: `${scheme.toUpperCase()} ${ip}:${port}`, verified: false, note: "port open; page not identified" });
+  });
+  const ssh = ports.find((p) => /ssh/i.test(p.name)) || (facts.ssh_port ? { port: facts.ssh_port } : null);
+  if (ssh) entries.push({ kind: "cli", transport: "ssh", port: ssh.port, label: `SSH ${ip}:${ssh.port}` });
+  const telnet = ports.find((p) => /telnet/i.test(p.name) || p.port === 23);
+  if (telnet) entries.push({ kind: "cli", transport: "telnet", port: telnet.port, label: `Telnet ${ip}:${telnet.port}`, note: "cleartext" });
+  return entries;
+}
+
+const REACH_LABEL = { up: "Up", down: "Down", "not-checked": "Not checked", unknown: "Unknown" };
+
+function monitoringSection(device, facts, endpoint) {
+  const reach = facts?.reachability;
+  const state = reach?.state || "unknown";
+  const badge = state === "up" ? "text-bg-success" : state === "down" ? "text-bg-danger" : "text-bg-light border";
+  return `<div class="ng-panel-section" data-panel="monitoring">
+    <div class="ng-panel-title">${endpoint ? "Endpoint monitoring" : "Reachability"}</div>
+    <dl class="ng-kv">
+      <dt>Status</dt><dd><span class="badge ${badge}" data-panel="reach-state">${escapeHtml(REACH_LABEL[state] || state)}</span>${reach?.via ? ` <span class="small text-muted-ng">${escapeHtml(reach.via)}</span>` : ""}</dd>
+      ${reach?.since ? `<dt>Since</dt><dd>${escapeHtml(formatDate(reach.since))}</dd>` : ""}
+      ${reach?.checked ? `<dt>Checked</dt><dd>${escapeHtml(formatDate(reach.checked))}</dd>` : ""}
+    </dl>
+    ${endpoint ? `<p class="small text-muted-ng mb-2">Unmanaged endpoint: NetGuard only checks that it answers (ICMP, or TCP to a port seen open). No login is requested.</p>` : ""}
+    <button class="btn btn-sm btn-light border" data-action="check-reachability"><i class="bi bi-arrow-repeat me-1"></i>Check now</button>
+  </div>`;
+}
+
+function accessSection(device, facts) {
+  const entries = managementAccess(device, facts);
+  const rows = entries.map((e) => e.kind === "web"
+    ? `<button class="btn btn-sm ${e.verified ? "btn-primary" : "btn-outline-primary"} text-start" data-action="open-url" data-device-id="${device.id}" data-url="${escapeHtml(e.url)}" title="${escapeHtml(e.url)}"><i class="bi bi-window me-1"></i>${escapeHtml(e.label)}<span class="d-block small mono">${escapeHtml(e.url)}${e.note ? ` · ${escapeHtml(e.note)}` : ""}</span></button>`
+    : `<button class="btn btn-sm btn-outline-secondary text-start" data-action="open-cli-at" data-device-id="${device.id}" data-transport="${e.transport}" data-port="${e.port}"><i class="bi bi-terminal me-1"></i>${escapeHtml(e.label)}${e.note ? `<span class="d-block small">${escapeHtml(e.note)}</span>` : ""}</button>`).join("");
+  return `<div class="ng-panel-section" data-panel="management-access">
+    <div class="ng-panel-title">Management access <span>${entries.length}</span></div>
+    ${entries.length ? `<div class="d-grid gap-1 mb-2">${rows}</div>` : `<p class="small text-muted-ng mb-2">No SSH, Telnet or web management port answered during discovery. Use Web GUI to scan more ports.</p>`}
+  </div>`;
+}
 
 function returnBanner(analysis) {
   if (!analysis) return "";
@@ -139,7 +206,7 @@ function discoverySection(device, facts) {
     <div class="ng-panel-title">Discovery</div>
     <dl class="ng-kv">
       <dt>Status</dt><dd data-panel="discovery-status">${escapeHtml(cls.label || '—')}</dd>
-      <dt>Authentication</dt><dd data-panel="discovery-auth" class="${cls.auth === 'success' ? 'text-success' : cls.auth === 'failed' ? 'text-danger' : 'text-muted-ng'}">${escapeHtml(DISCOVERY_AUTH[cls.auth] || '—')}${(facts.methods || []).length ? ` · ${escapeHtml(facts.methods.map((m) => DISCOVERY_METHODS[m] || m).join(', '))}` : ''}</dd>
+      <dt>Authentication</dt><dd data-panel="discovery-auth" class="${cls.auth === 'success' ? 'text-success' : cls.auth === 'failed' ? 'text-danger' : 'text-muted-ng'}">${escapeHtml(DISCOVERY_AUTH[cls.auth] || '—')}${(facts.login_methods || facts.methods || []).length ? ` · ${escapeHtml((facts.login_methods || facts.methods).map((m) => `${DISCOVERY_METHODS[m] || m}${(facts.methods || []).includes(m) ? '' : ' (not seen in scan)'}`).join(', '))}` : ''}</dd>
       <dt>Missing</dt><dd>${(cls.missing || []).length ? escapeHtml(cls.missing.join(', ')) : 'Nothing within the supported scope'}</dd>
     </dl>
     ${(facts.location_notes || []).map((note) => `<p class="small mb-1"><i class="bi bi-geo-alt me-1"></i>${escapeHtml(note)}</p>`).join('')}
@@ -151,6 +218,8 @@ function discoverySection(device, facts) {
 export function renderDevice(device, analysis) {
   const discovery = store.network?.metadata_json?.discovery?.[String(device.id)];
   const smart = store.network?.metadata_json?.method === 'smart' && !!discovery;
+  // Endpoints in a discovered real network are only monitored; laboratory PCs keep their console.
+  const endpoint = isDiscoveredNetwork(store.network) && isMonitoredEndpoint(device) && !device.access?.console;
   const neighbours = interfaceNeighbours(device.id);
   const isSwitch = device.device_type === "switch";
   const isL3 = L3.includes(device.device_type);
@@ -223,12 +292,15 @@ export function renderDevice(device, analysis) {
       </dl>
     </div>
     ${smart ? discoverySection(device, discovery) : ''}
+    ${smart && endpoint ? monitoringSection(device, discovery, true) : ''}
+    ${smart && !endpoint && device.management_ip ? accessSection(device, discovery) : ''}
+    ${smart && !endpoint && discovery?.reachability ? monitoringSection(device, discovery, false) : ''}
     <div class="ng-panel-section">
       <div class="ng-panel-actions">
         ${(() => {
           const access = [
-            device.management_ip || device.access?.console ? `<button class="btn btn-sm btn-outline-secondary" data-action="open-cli" data-device-id="${device.id}" title="Interactive terminal (double-click the device)"><i class="bi bi-terminal me-1"></i>Open CLI</button>` : "",
-            device.management_ip || device.access?.console ? `<button class="btn btn-sm btn-outline-secondary" data-action="open-gui" data-device-id="${device.id}" title="Detected web management portals"><i class="bi bi-window me-1"></i>Web GUI</button>` : "",
+            (device.management_ip && !endpoint) || device.access?.console ? `<button class="btn btn-sm btn-outline-secondary" data-action="open-cli" data-device-id="${device.id}" title="Interactive terminal (double-click the device)"><i class="bi bi-terminal me-1"></i>Open CLI</button>` : "",
+            (device.management_ip && !endpoint) || device.access?.console ? `<button class="btn btn-sm btn-outline-secondary" data-action="open-gui" data-device-id="${device.id}" title="Detected web management portals"><i class="bi bi-window me-1"></i>Web GUI</button>` : "",
             ['switch', 'router', 'firewall'].includes(device.device_type) ? `<button class="btn btn-sm btn-outline-secondary" data-action="port-clients" data-device-id="${device.id}" title="What is connected to each port"><i class="bi bi-hdd-network me-1"></i>Ports</button>` : "",
           ].filter(Boolean);
           return access.length ? `<div class="ng-access-row full">${access.join("")}</div>` : "";

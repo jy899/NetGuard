@@ -520,6 +520,7 @@ body.ng-topology-page .ng-main { height: 100vh; }
 .ng-map-legend .nd.auth { border-color: #c08a1d; border-style: dashed; }
 .ng-map-legend .nd.failed { border-color: #c62f2f; }
 .ng-map-legend .nd.unverified { border-color: #98a2b3; border-style: dotted; }
+.ng-map-legend .nd.unreachable { border-color: #c62828; border-style: dashed; opacity: .7; }
 .ng-badge-inferred { background: #ece6fa; color: #4f3a91; border: 1px solid #c9bdee; }
 .ng-scan-timeline li { padding: 4px 0; font-size: 13px; }
 .ng-scan-timeline li.pending { opacity: .45; }

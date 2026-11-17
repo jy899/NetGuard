@@ -129,8 +129,8 @@ def collect(target: Target) -> Collection:
     finally:
         try:
             conn.disconnect()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - the session is already gone
+            log.debug("SSH disconnect after collection failed", exc_info=True)
     if not result.outputs.get("running"):
         raise CliError("The device returned no running configuration (check the account's privilege level).")
     parse(result)
@@ -347,8 +347,8 @@ def running_config(target: Target) -> str:
 def _close(conn) -> None:
     try:
         conn.disconnect()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - the session is already gone
+        log.debug("SSH disconnect failed", exc_info=True)
 
 
 def apply_config(target: Target, commands: list[str]) -> str:

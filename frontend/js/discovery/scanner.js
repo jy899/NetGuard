@@ -43,6 +43,7 @@ async function startScan() {
     const job = await api.post("/discovery/jobs", {
       target: $("scan-target").value.trim(), authorized_scope: true, excluded: list("scan-excluded"),
       untrusted: list("scan-untrusted"), auto_credentials: $("scan-auto").checked, follow_neighbours: $("scan-follow").checked,
+      traverse_scope: $("scan-traverse")?.value.trim() || null,
     });
     progressView(job);
     await new Promise((resolve) => {

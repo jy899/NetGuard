@@ -23,7 +23,7 @@ function modal(id, title, body, footer = "") {
 }
 
 // ------------------------------------------------------------------ CLI terminal
-export async function openTerminal(device) {
+export async function openTerminal(device, preset = {}) {
   if (!device) return;
   const lab = !!device.is_lab;
   const consoleUrl = device.access?.console;
@@ -45,6 +45,9 @@ export async function openTerminal(device) {
     </div></form>`;
   const { el, instance } = modal("term-modal", `Open CLI · ${escapeHtml(device.name)}`, body,
     `<button class="btn btn-light" type="button" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="button" id="term-connect"><i class="bi bi-terminal me-1"></i>Connect</button>`);
+  if (preset.transport && el.querySelector(`#term-transport option[value="${preset.transport}"]`)) el.querySelector("#term-transport").value = preset.transport;
+  if (preset.port) el.querySelector("#term-port").value = String(preset.port);
+  el.querySelector("#term-user").focus();
   el.querySelector("#term-connect").addEventListener("click", async () => {
     const error = el.querySelector("[data-term-error]");
     error.classList.add("d-none");

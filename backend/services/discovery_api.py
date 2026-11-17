@@ -50,13 +50,30 @@ def _resolve_targets(target: str | None) -> tuple[ipaddress.IPv4Network, list[ip
     return first, extra
 
 
+def _traverse_scope(text: str | None, network_range) -> ipaddress.IPv4Network | None:
+    """The optional wider routed scope (VLANs behind the gateway) the engineer authorises, checked before scanning."""
+    if not text or not text.strip():
+        return None
+    try:
+        scope = ipaddress.IPv4Network(text.strip(), strict=False)
+    except ValueError as exc:
+        raise ValidationFailed(f"Routed scope to traverse: {exc}") from exc
+    if scope.prefixlen < smart.subnets.TRAVERSE_MIN_PREFIX:
+        raise ValidationFailed(f"Limit the routed scope to traverse to at most a /{smart.subnets.TRAVERSE_MIN_PREFIX} (65,536 addresses).")
+    if not network_range.subnet_of(scope):
+        raise ValidationFailed(f"The routed scope {scope} must contain the range being scanned ({network_range}).")
+    return scope
+
+
 def scan(db: Session, user, target: str | None = None, name: str | None = None, authorized_scope: bool = False,
          excluded: list[str] | None = None, untrusted: list[str] | None = None, auto_credentials: bool = False,
-         follow_neighbours: bool = False, max_depth: int = smart.MAX_CRAWL_DEPTH, progress=None) -> dict:
+         follow_neighbours: bool = False, max_depth: int = smart.MAX_CRAWL_DEPTH, progress=None,
+         traverse_scope: str | None = None) -> dict:
     network_range, extra_ranges = _resolve_targets(target)
+    traverse = _traverse_scope(traverse_scope, network_range)
     network = smart.scan(db, user, network_range, name, authorized_scope, excluded, untrusted,
                          auto_credentials=auto_credentials, follow_neighbours=follow_neighbours, max_depth=max_depth,
-                         progress=progress, extra_ranges=extra_ranges)
+                         progress=progress, extra_ranges=extra_ranges, traverse_scope=traverse)
     out = result(db, user, network.id)
     history_service.record(db, user, network.id, "scan", "Network discovery completed",
                            {"device_count": len(out["devices"]), "link_count": len(out["links"]), "status": "completed"},
@@ -84,6 +101,8 @@ def result(db: Session, user, network_id: int) -> dict:
            "devices": rows, "links": links, "assignments": credential_service.list_assignments(db, user, network.id),
            "mode": (network.metadata_json or {}).get("mode", "live"),
            "crawl": (network.metadata_json or {}).get("crawl", []),
+           "segments": (network.metadata_json or {}).get("segments"),
+           "subnets_not_scanned": (network.metadata_json or {}).get("subnets_not_scanned", []),
            "live_device_contact": bool((network.metadata_json or {}).get("live_device_contact", True)),
            "summary": {"found": len(rows), "authenticated": sum(row.get("auth_status") == "success" for row in rows),
                        "observed_links": sum(link.get("discovery_status") == "observed" for link in links),
@@ -110,6 +129,13 @@ def crawl(db: Session, user, network_id: int, follow_neighbours: bool | None = N
         db.commit()
     summary = smart.crawl(db, user, network, follow_neighbours=follow, max_depth=max_depth)
     return {"crawl": summary, "result": result(db, user, network_id)}
+
+
+def reachability(db: Session, user, network_id: int) -> dict:
+    network = credential_service.network_for(db, user, network_id)
+    if not smart.is_smart(network):
+        raise ValidationFailed("Up/down monitoring is available for discovered networks.")
+    return smart.reachability(db, network)
 
 
 def refresh(db: Session, user, network_id: int) -> dict:
@@ -142,7 +168,8 @@ _JOBS_LOCK = _threading.Lock()
 PHASES = {"sweep": "Finding live hosts (ICMP, TCP, ARP)", "services": "Identifying services, names and SNMP agents",
           "identify": "Reading UPnP, banners and certificates", "done": "Correlating evidence",
           "credentials": "Reading devices with your credentials", "neighbours": "Following neighbours",
-          "subnets": "Scanning other VLANs and subnets"}
+          "subnets": "Scanning other VLANs and subnets",
+          "segments": "Finding routed segments inside the authorised scope (gateway .1 / .254)"}
 
 
 def start_scan(db: Session, user, **params) -> dict:
@@ -154,6 +181,7 @@ def start_scan(db: Session, user, **params) -> dict:
         raise ValidationFailed(f"Limit discovery to an authorized range of at most a /{smart.MAX_PREFIX} (1,024 addresses).")
     smart.parse_scope(params.get("excluded"), "Excluded addresses")
     smart.parse_scope(params.get("untrusted"), "Untrusted segments")
+    _traverse_scope(params.get("traverse_scope"), network_range)
     job_id = _uuid.uuid4().hex
     total = sum(n.num_addresses - (2 if n.prefixlen < 31 else 0) for n in [network_range, *extra_ranges])
     job = {"id": job_id, "user_id": user.id, "state": "running", "phase": "sweep", "phase_label": PHASES["sweep"],

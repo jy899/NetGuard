@@ -92,6 +92,18 @@ def test_dashboard_uses_latest_analysis_per_network(client, auth):
     summary = client.get("/api/dashboard/summary", headers=auth).json()
     assert summary["detected_issues"] == first["summary"]["issue_count"]
     assert summary["analysis_runs"] == 2 and len(summary["recent_activity"]) == 2
+    assert summary["analysed_networks"] == 1
+
+
+def test_dashboard_separates_unanalysed_and_deleted_networks(client, auth):
+    analysed = _scenario(client, auth, "vlan")
+    issues = client.post(f"/api/networks/{analysed['id']}/analyze", headers=auth).json()["summary"]["issue_count"]
+    _scenario(client, auth, "vlan")  # never analysed
+    summary = client.get("/api/dashboard/summary", headers=auth).json()
+    assert (summary["networks"], summary["analysed_networks"], summary["detected_issues"]) == (2, 1, issues)
+    assert client.delete(f"/api/networks/{analysed['id']}", headers=auth).status_code in (200, 204)
+    summary = client.get("/api/dashboard/summary", headers=auth).json()
+    assert (summary["networks"], summary["analysed_networks"], summary["detected_issues"]) == (1, 0, 0)
 
 
 def test_assessment_contains_real_baseline_and_candidate_snapshots(client, auth):

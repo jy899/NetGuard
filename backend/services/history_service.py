@@ -68,6 +68,7 @@ def analyze(db: Session, user, network_id: int, kind: str = "analysis", title: s
     topology = topology_service.get_topology(db, network_id).model_dump(mode="json")
     summary = {"issue_count": analysis["issue_count"], "status": analysis["status"], "advisory_count": analysis["advisory_count"],
                "device_count": analysis["devices_checked"], "link_count": analysis["links_checked"],
+               "logical_link_count": analysis.get("logical_links", 0), "cabling_count": analysis.get("cabling_count", 0),
                "failing_flow_count": analysis["failing_flow_count"]}
     row = record(db, user, network_id, kind, title or f"{network.name} — {'Analysis Report' if kind == 'report' else 'Network Analysis'}",
                  summary, {"network": topology["network"], "topology": topology, "analysis": analysis})

@@ -1,6 +1,7 @@
 """Device terminals (WebSocket CLI), web management portals and the multi-vendor driver matrix."""
 from __future__ import annotations
 
+import logging
 import asyncio
 import json
 import secrets
@@ -148,7 +149,7 @@ async def terminal_socket(websocket: WebSocket):
         except (RuntimeError, asyncio.CancelledError, WebSocketDisconnect, OSError):
             pass  # the browser already closed the socket
         except Exception:  # noqa: BLE001 - uvicorn's ClientDisconnected and similar transport teardown errors
-            pass
+            logging.getLogger("netguard.terminal").debug("Terminal socket close failed", exc_info=True)
 
 
 # ------------------------------------------------------------------ web management portals

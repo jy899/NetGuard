@@ -18,6 +18,7 @@ Governance:
 """
 from __future__ import annotations
 
+import logging
 import json
 import re
 import secrets
@@ -154,14 +155,14 @@ class SshChannel(Channel):
     def resize(self, cols: int, rows: int) -> None:
         try:
             self.chan.resize_pty(width=cols, height=rows)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - a resize on a closing channel is harmless
+            logging.getLogger("netguard.terminal").debug("Terminal resize failed", exc_info=True)
 
     def close(self) -> None:
         try:
             self.client.close()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - the session is already gone
+            logging.getLogger("netguard.terminal").debug("Terminal close failed", exc_info=True)
 
 
 IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240

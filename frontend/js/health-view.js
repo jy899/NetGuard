@@ -121,6 +121,9 @@ export function renderHealthPanel(report, skipped = new Set(), network = {}, use
   viewer = user;
   const healthy = report.status === "healthy";
   const incomplete = report.status === 'incomplete' || report.analysis_complete === false;
+  // Failing flows are usually caused by the listed issues, so they are not added to the issue count.
+  const problems = (report.issue_count || 0) + (report.cabling_count || 0);
+  const failed = report.failing_flow_count || 0;
   const fixable = fixableIssues(report, skipped);
   const visible = report.issues.map((issue, index) => ({ issue, index })).filter(({ issue }) => !skipped.has(issue.key));
   const issues = visible
@@ -167,15 +170,16 @@ export function renderHealthPanel(report, skipped = new Set(), network = {}, use
     <div class="ng-panel-section ng-analysis-head">
       <div class="ng-panel-title">Network Analysis
         <button class="btn btn-sm btn-link p-0" data-action="close-health" title="Close health check" aria-label="Close health check"><i class="bi bi-x-lg"></i></button></div>
-      <div class="ng-decision ${riskClass(healthy ? "LOW" : incomplete && !report.issue_count ? "MEDIUM" : report.counts.CRITICAL ? "CRITICAL" : "HIGH")}">
-        <div class="label" data-health="status">${incomplete && !report.issue_count && !report.failing_flow_count ? 'NO DETECTED ISSUES · LIMITED COVERAGE' : healthy ? "HEALTHY" : `${report.issue_count} ISSUE${report.issue_count === 1 ? "" : "S"} FOUND`}</div>
+      <div class="ng-decision ${riskClass(healthy ? "LOW" : incomplete && !problems && !failed ? "MEDIUM" : report.counts.CRITICAL ? "CRITICAL" : "HIGH")}">
+        <div class="label" data-health="status">${!problems && !failed && incomplete ? 'NO DETECTED ISSUES · LIMITED COVERAGE' : healthy ? "HEALTHY" : problems ? `${problems} ISSUE${problems === 1 ? "" : "S"} FOUND` : `${failed} CONNECTION CHECK${failed === 1 ? "" : "S"} FAILED`}</div>
         <p>${healthy ? `No supported issues found. All modeled ${implicit ? "host-pair" : "required-flow"} checks passed.`
+          : report.cabling_count ? `${report.cabling_count} cable(s) from the imported file are missing${report.failing_flow_count ? ` and ${report.failing_flow_count} connection check(s) failed` : ""}. Review the findings below.`
           : report.failing_flow_count ? `${report.failing_flow_count} modeled connection check(s) failed. Review the findings below.`
           : report.issue_count ? 'Review the detected configuration findings below. Service impact is limited to the available model.'
           : 'No fault was detected in the available data. Review the coverage gaps below before treating this network as healthy.'}</p>
         ${incomplete ? `<p class="small mb-0">Analysis coverage is partial.${report.unknown_flow_count ? ` ${report.unknown_flow_count} traffic check(s) could not be verified.` : ''} Missing evidence is not a confirmed fault or a passing test.</p>` : ''}
       </div>
-      <div class="small text-muted-ng mt-2">${report.rules_checked} rules · ${report.devices_checked} devices · ${report.links_checked} links ·
+      <div class="small text-muted-ng mt-2">${report.rules_checked} rules · ${report.devices_checked} devices · ${report.links_checked} cabled links${report.logical_links ? ` · ${report.logical_links} logical (not analysed)` : ""} ·
         ${report.elapsed_ms} ms · ${formatDate(report.checked_at)}</div>
       <div class="small mt-2" data-health="summary">Connectivity ${escapeHtml(String(report.status || "").toUpperCase())} · ${(report.advisories || []).length} security advisories</div>
       <div class="small text-muted-ng mt-1" data-health="evidence-scope">${escapeHtml(scopeText(report.evidence_scope || environmentLabel(network)))}</div>
@@ -193,6 +197,7 @@ export function renderHealthPanel(report, skipped = new Set(), network = {}, use
     </div>
     ${appliedFixesBlock(appliedFixes, user)}
     ${aiInsightsBlock(report.ai)}
+    ${(report.cabling_findings || []).length ? `<div class="ng-panel-section" data-health="cabling"><div class="ng-panel-title">Cabling <span>${report.cabling_findings.length}</span></div>${report.cabling_findings.map((f) => `<div class="border rounded p-2 mb-2 small"><span class="badge ${f.severity === "HIGH" ? "text-bg-danger" : "text-bg-warning"} me-1">${escapeHtml(f.severity)}</span><strong>${escapeHtml(f.detail)}</strong><div class="text-muted-ng mt-1">${escapeHtml(f.next_step)}</div></div>`).join("")}<button class="btn btn-sm btn-outline-secondary" data-action="accept-cabling"><i class="bi bi-check2-square me-1"></i>Accept current cabling</button></div>` : ""}
     ${visible.length ? `<div class="ng-panel-section"><div class="ng-panel-title">Issues <span>${visible.length}</span></div>${issues}</div>` : ""}
     ${(report.advisories || []).length ? `<div class="ng-panel-section" data-health="advisories"><div class="ng-panel-title">Security &amp; hygiene advisories <span>${report.advisories.length}</span></div><p class="small text-muted-ng">Advisories do not change connectivity status.</p>${report.advisories.map((advisory, index) => advisoriesBlock([advisory]) + ((advisory.fixes || []).length ? `<div class="ms-2 mb-3">${advisory.fixes.map((fix, fixIndex) => fixHtml(index, fix, fixIndex, "advisory")).join("")}</div>` : "")).join("")}</div>` : ""}
     ${(report.coverage_notes || []).length ? `<div class="ng-panel-section"><div class="ng-panel-title">Analysis coverage notes</div><ul class="small ps-3 mb-0">${report.coverage_notes.map(note => `<li>${escapeHtml(typeof note === "object" ? note.detail || note.message : note)}</li>`).join("")}</ul></div>` : ""}

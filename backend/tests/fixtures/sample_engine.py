@@ -38,6 +38,13 @@ class SimulatedDiscoveryEngine:
     def _devices(self):
         return [d for d in sample.DEVICES if self.in_target(d["ip"])]
 
+    # ------------------------------------------------------------ up/down monitoring
+    down: set[str] = set()  # tests mark addresses as down here
+
+    def reachable(self, targets):
+        return {ip: ({"state": "down", "via": "no ICMP or TCP answer"} if ip in self.down else {"state": "up", "via": "ICMP echo"})
+                for ip in targets}
+
     # ------------------------------------------------------------ credential-free
     def probe(self) -> ProbeResult:
         devices = self._devices()

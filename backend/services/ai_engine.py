@@ -14,6 +14,7 @@ every output is labelled advisory. When the model files are missing the features
 """
 from __future__ import annotations
 
+import logging
 import json
 import math
 from collections import Counter, defaultdict
@@ -530,7 +531,8 @@ def _auto_retrain() -> None:
             if _executed_count(db) - int(current.get("local_outcomes") or 0) >= settings["after"]:
                 retrain(db, True, trigger="auto")
     except Exception:  # noqa: BLE001 - background learning never disturbs the user
-        pass
+        logging.getLogger("netguard.ai").warning("Automatic AI retraining failed; the current models stay in use.",
+                                                 exc_info=True)
 
 
 def record_execution(db, change, verification: dict, success: bool) -> None:

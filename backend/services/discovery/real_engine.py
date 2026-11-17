@@ -72,6 +72,33 @@ class RealDiscoveryEngine:
         hosts = [self.target.network_address] if self.target.prefixlen == 32 else list(self.target.hosts())
         return [str(h) for h in hosts if not any(h in net for net in self.excluded)]
 
+    # ------------------------------------------------------------ up/down monitoring
+    def reachable(self, targets: dict[str, list[int]]) -> dict[str, dict]:
+        """Up/down for already-known addresses: ICMP echo, then a TCP connect to the ports seen open (hosts that drop ICMP)."""
+        def check(ip: str) -> tuple[str, dict]:
+            if netutil.ping(ip, 700):
+                return ip, {"state": "up", "via": "ICMP echo"}
+            for port in (targets.get(ip) or [443, 22, 80])[:4]:
+                if netutil.tcp_open(ip, port, self.timeout):
+                    return ip, {"state": "up", "via": f"TCP {port}"}
+            return ip, {"state": "down", "via": "no ICMP or TCP answer"}
+        return dict(netutil.parallel(check, list(targets), workers=min(64, max(1, len(targets)))))
+
+    def segment_gateways(self, segments: dict[str, list[str]]) -> dict[str, dict]:
+        """Which /24 segments have a router answering on a usual gateway address (credential-free, ICMP then TCP)."""
+        targets = {ip: [] for ips in segments.values() for ip in ips}
+        answers = self.reachable(targets) if targets else {}
+        out = {}
+        for cidr, ips in segments.items():
+            hit = next((ip for ip in ips if answers.get(ip, {}).get("state") == "up"), None)
+            if hit:
+                out[cidr] = {"gateway": hit, "via": answers[hit]["via"]}
+        return out
+
+    def local_subnets(self) -> list[str]:
+        """Subnets this computer itself is attached to (its own interfaces)."""
+        return [row["scan_target"] for row in netutil.local_networks().get("interfaces", []) if not row.get("virtual")]
+
     # ------------------------------------------------------------ credential-free
     def probe(self, addresses: list[str] | None = None, progress=None) -> ProbeResult:
         """Probe the authorised range, or the given addresses (neighbours learned from devices already read).

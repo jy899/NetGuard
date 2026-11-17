@@ -69,6 +69,10 @@ const STYLE = [
     },
   },
   { selector: 'edge[media = "fibre"]', style: { "line-color": "#0e9bb0" } }, // aqua, like OM3/OM4 fibre jackets
+  {
+    selector: "edge.ng-bus",
+    style: { "curve-style": "taxi", "taxi-direction": "downward", "taxi-turn": 70, "taxi-turn-min-distance": 4, width: 1.4 },
+  },
   { selector: "edge:selected", style: { width: 3.5, "line-color": "#1f5fbf", color: "#1f5fbf" } },
   // Line pattern encodes evidence (solid confirmed, long dash inferred, dotted unknown); colour encodes state.
   { selector: 'edge[discoveryStatus = "inferred"]', style: { "line-style": "dashed", "line-dash-pattern": [10, 6], "line-color": "#7a5cc4" } },
@@ -84,6 +88,8 @@ const STYLE = [
   { selector: 'node[discoveryState = "auth_required"]', style: { "border-width": 2.5, "border-style": "dashed", "border-color": "#c08a1d" } },
   { selector: 'node[discoveryState = "auth_failed"]', style: { "border-width": 2.5, "border-style": "solid", "border-color": "#c62f2f" } },
   { selector: 'node[discoveryState = "unverified"]', style: { "border-width": 2, "border-style": "dotted", "border-color": "#98a2b3" } },
+  // Up/down monitoring: a device that stopped answering is faded with a red dashed frame (not colour alone: the label says "Down").
+  { selector: 'node[reach = "down"]', style: { "border-width": 2, "border-style": "dashed", "border-color": "#c62828", "background-opacity": 0.75, "background-image-opacity": 0.45, color: "#a51d1d" } },
 
   // ---- analysis highlighting (risk colour passed in as data(riskColor))
   { selector: ".ng-dim", style: { opacity: 0.32 } },
@@ -145,6 +151,7 @@ export function createGraph(container) {
     selectionType: "single",
   });
   cy.on("position", "node", (event) => updateLabelOffsets(event.target.connectedEdges()));
+  cy.on("dragfree", "node", () => markBusEdges(cy));
   cy.on("add", "edge", (event) => updateLabelOffsets(event.target));
   return cy;
 }
@@ -155,13 +162,15 @@ const STATE_TAGS = { auth_required: "Auth required", auth_failed: "Auth failed",
 function nodeData(device, network = null) {
   const facts = network?.metadata_json?.method === "smart" ? network.metadata_json.discovery?.[String(device.id)] : null;
   const state = facts?.classification?.primary || "";
-  const tags = [STATE_TAGS[state], facts?.unknown_row ? "Connection unknown" : null].filter(Boolean);
+  const reach = facts?.reachability?.state || "";
+  const tags = [reach === "down" ? "Down" : null, STATE_TAGS[state], facts?.unknown_row ? "Connection unknown" : null].filter(Boolean);
   const base = device.management_ip && device.name !== device.management_ip ? `${device.name}\n${device.management_ip}` : device.name;
   return {
     id: nodeId(device.id),
     deviceId: device.id,
     label: device.name,
     discoveryState: state,
+    reach,
     displayLabel: tags.length ? `${base}\n${tags.join(" · ")}` : base,
     type: device.device_type,
     role: device.role || device.device_type,
@@ -218,6 +227,7 @@ export function syncGraph(cy, store, { resetPositions = false } = {}) {
       else cy.add({ group: "edges", data: edgeData(link) });
     }
   });
+  markBusEdges(cy);
   updateLabelOffsets(cy.edges());
 }
 
@@ -250,7 +260,7 @@ export function fitGraph(cy) {
     cy.reset();
     return;
   }
-  cy.fit(cy.elements(), 28);
+  cy.fit(cy.elements(), 56);  // clears the legend and zoom controls drawn over the canvas corners
   if (cy.zoom() > 1.3) {
     cy.zoom(1.3);
     cy.center();
@@ -296,8 +306,11 @@ export function clearHighlight(cy) {
 }
 
 export function autoArrange(cy, network = null) {
-  if (network?.environment === "real" || network?.source === "discovery") {
-    arrangeDiscovered(cy);
+  // Discovered networks, and any map where one device carries many endpoints, use the hierarchical grid:
+  // a long row of endpoints would otherwise stretch far off-screen.
+  if (network?.environment === "real" || network?.source === "discovery" || largestFanOut(cy) > 8) {
+    arrangeHierarchy(cy);
+    markBusEdges(cy);
     updateLabelOffsets(cy.edges());
     return;
   }
@@ -311,55 +324,113 @@ export function autoArrange(cy, network = null) {
     padding: 60,
     animate: false,
   }).run();
+  markBusEdges(cy);
   updateLabelOffsets(cy.edges());
 }
 
-/** Keep each endpoint beneath the infrastructure device carrying its cable. */
-function arrangeDiscovered(cy) {
-  const infrastructure = cy.nodes().filter(node => ["router", "firewall", "switch", "internet"].includes(node.data("role") || node.data("type")));
-  if (!infrastructure.length) return;
-  const root = infrastructure.filter(node => ["firewall", "router"].includes(node.data("type"))).first();
-  const start = root.length ? root : infrastructure.sort((a, b) => b.degree() - a.degree()).first();
-  const depth = new Map([[start.id(), 0]]);
-  const queue = [start];
-  for (let index = 0; index < queue.length; index += 1) {
-    queue[index].neighborhood("node").filter(node => infrastructure.contains(node)).forEach(node => {
-      if (depth.has(node.id())) return;
-      depth.set(node.id(), depth.get(queue[index].id()) + 1);
-      queue.push(node);
-    });
+const INFRA_TYPES = new Set(["router", "firewall", "switch", "internet"]);
+const CELL_W = 150;       // grid column width
+const CELL_H = 125;       // grid row height
+const LEVEL_GAP = 170;    // a device to the first row beneath it
+const SIBLING_GAP = 90;   // between neighbouring subtrees
+
+const isInfra = (node) => INFRA_TYPES.has(node.data("role") || node.data("type"));
+const byLabel = (a, b) => String(a.data("label") || "").localeCompare(String(b.data("label") || ""), undefined, { numeric: true });
+
+function largestFanOut(cy) {
+  return cy.nodes().filter(isInfra).reduce((most, node) => Math.max(most, node.neighborhood("node").filter((n) => !isInfra(n)).length), 0);
+}
+
+/** Columns for a block of endpoints: one row up to 6, then a block about twice as wide as it is tall (at most 10). */
+function gridColumns(count) {
+  if (count <= 6) return Math.max(count, 1);
+  return Math.min(10, Math.ceil(Math.sqrt(count * 2.4)));
+}
+
+function placeGrid(nodes, left, top) {
+  const cols = gridColumns(nodes.length);
+  nodes.forEach((node, index) => node.position({ x: left + (index % cols) * CELL_W + CELL_W / 2, y: top + Math.floor(index / cols) * CELL_H }));
+}
+
+/**
+ * Hierarchical grid: infrastructure forms a tree (internet, firewall, router, then switches); each endpoint sits in a
+ * compact grid under the device it is linked to (a switch first), wrapped into rows instead of one long line.
+ */
+function arrangeHierarchy(cy) {
+  const infrastructure = cy.nodes().filter(isInfra);
+  if (!infrastructure.length) {
+    cy.batch(() => placeGrid(cy.nodes().sort(byLabel), 0, 0));
+    return;
   }
-  const endpoints = cy.nodes().difference(infrastructure);
-  const children = new Map(infrastructure.map(node => [node.id(), []]));
-  endpoints.forEach(node => {
-    const parent = node.neighborhood("node").filter(peer => infrastructure.contains(peer)).first();
-    if (parent.length) children.get(parent.id()).push(node);
-  });
-  const rows = new Map();
-  infrastructure.forEach(node => {
-    const level = depth.get(node.id()) ?? 0;
-    if (!rows.has(level)) rows.set(level, []);
-    rows.get(level).push(node);
-  });
-  let endpointX = 0;
-  cy.batch(() => {
-    [...rows].sort(([a], [b]) => b - a).forEach(([level, nodes]) => {
-      nodes.sort((a, b) => a.data("label").localeCompare(b.data("label")));
-      nodes.forEach(node => {
-        const leaves = children.get(node.id()).sort((a, b) => a.data("label").localeCompare(b.data("label")));
-        const downstream = node.neighborhood("node").filter(peer => (depth.get(peer.id()) ?? -1) > level);
-        let x;
-        if (leaves.length) {
-          leaves.forEach((leaf, index) => leaf.position({ x: endpointX + index * 155, y: level * 200 + 200 }));
-          x = endpointX + (leaves.length - 1) * 155 / 2;
-          endpointX += Math.max(1, leaves.length) * 155 + 130;
-        } else if (downstream.length) x = downstream.reduce((sum, peer) => sum + peer.position("x"), 0) / downstream.length;
-        else { x = endpointX; endpointX += 220; }
-        // Endpoints on a core branch occupy their own horizontal interval.
-        if (leaves.length && downstream.length) x = (x + downstream.reduce((sum, peer) => sum + peer.position("x"), 0) / downstream.length) / 2;
-        node.position({ x, y: level * 200 });
+  const rank = (node) => ({ internet: 0, firewall: 1, router: 2, switch: 3 })[node.data("type")] ?? 4;
+  const ordered = infrastructure.sort((a, b) => rank(a) - rank(b) || b.degree() - a.degree() || byLabel(a, b));
+  const kids = new Map(infrastructure.map((node) => [node.id(), []]));
+  const roots = [];
+  const seen = new Set();
+  ordered.forEach((start) => {
+    if (seen.has(start.id())) return;
+    roots.push(start);
+    seen.add(start.id());
+    const queue = [start];
+    for (let index = 0; index < queue.length; index += 1) {
+      queue[index].neighborhood("node").filter(isInfra).sort(byLabel).forEach((peer) => {
+        if (seen.has(peer.id())) return;
+        seen.add(peer.id());
+        kids.get(queue[index].id()).push(peer);
+        queue.push(peer);
       });
+    }
+  });
+  const leaves = new Map(infrastructure.map((node) => [node.id(), []]));
+  const orphans = [];
+  cy.nodes().filter((node) => !isInfra(node)).sort(byLabel).forEach((node) => {
+    const peers = node.neighborhood("node").filter(isInfra);
+    if (peers.empty()) { orphans.push(node); return; }
+    const host = peers.sort((a, b) => (a.data("type") === "switch" ? 0 : 1) - (b.data("type") === "switch" ? 0 : 1) || byLabel(a, b)).first();
+    leaves.get(host.id()).push(node);
+  });
+  const size = new Map();
+  const childrenWidth = (node) => kids.get(node.id()).reduce((sum, kid) => sum + size.get(kid.id()).width, 0)
+    + SIBLING_GAP * Math.max(0, kids.get(node.id()).length - 1);
+  const measure = (node) => {
+    kids.get(node.id()).forEach(measure);
+    const count = leaves.get(node.id()).length;
+    const cols = count ? gridColumns(count) : 0;
+    const rows = count ? Math.ceil(count / cols) : 0;
+    size.set(node.id(), { cols, rows, width: Math.max(cols * CELL_W, childrenWidth(node), CELL_W) });
+  };
+  const place = (node, left, top) => {
+    const { cols, rows, width } = size.get(node.id());
+    node.position({ x: left + width / 2, y: top });
+    const list = leaves.get(node.id());
+    list.forEach((leaf, index) => {
+      const row = Math.floor(index / cols);
+      const inRow = Math.min(cols, list.length - row * cols);
+      const rowLeft = left + width / 2 - (inRow * CELL_W) / 2;
+      leaf.position({ x: rowLeft + (index % cols) * CELL_W + CELL_W / 2, y: top + LEVEL_GAP + row * CELL_H });
     });
-    endpoints.filter(node => !node.neighborhood("node").some(peer => infrastructure.contains(peer))).forEach((node, index) => node.position({ x: endpointX + index * 155, y: 540 }));
+    const childTop = top + LEVEL_GAP + (rows ? (rows - 1) * CELL_H + LEVEL_GAP : 0);
+    let childLeft = left + (width - childrenWidth(node)) / 2;
+    kids.get(node.id()).forEach((kid) => {
+      place(kid, childLeft, childTop);
+      childLeft += size.get(kid.id()).width + SIBLING_GAP;
+    });
+  };
+  cy.batch(() => {
+    let left = 0;
+    roots.forEach((root) => {
+      measure(root);
+      place(root, left, 0);
+      left += size.get(root.id()).width + SIBLING_GAP * 2;
+    });
+    if (orphans.length) placeGrid(orphans, left, 0);
+  });
+}
+
+/** Logical links from a device down to an endpoint are drawn as a bus (down, across, down), not a fan of diagonals. */
+function markBusEdges(cy) {
+  cy.edges('[kind = "logical"]').forEach((edge) => {
+    const below = edge.target().position("y") - edge.source().position("y") > 60;
+    edge.toggleClass("ng-bus", below && isInfra(edge.source()) && !isInfra(edge.target()));
   });
 }

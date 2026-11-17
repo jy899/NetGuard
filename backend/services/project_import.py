@@ -179,7 +179,7 @@ def _eve_topology(xml: str, filename: str) -> labs.LabTopology:
         if ref is None:
             continue
         node = labs.LabNode(ref=ref, name=n.get("name") or f"node{ref}",
-                            kind=labs._kind(n.get("template"), n.get("image"), n.get("type")), template=n.get("template"),
+                            kind=labs._kind(n.get("template"), n.get("image"), n.get("type"), n.get("name")), template=n.get("template"),
                             console=None, status="stopped",
                             platform=labs._platform(n.get("template"), n.get("image"), n.get("type")),
                             x=labs._num(n.get("left")), y=labs._num(n.get("top")))

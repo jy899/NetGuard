@@ -38,7 +38,8 @@ def from_history(record, snapshot: dict | None = None) -> dict:
         sections.append({"heading": "Summary", "table": _table(["Measure", "Value"], [
             ["Status", analysis.get("status")], ["Issues", analysis.get("issue_count")],
             ["Security and hygiene advisories", analysis.get("advisory_count")],
-            ["Devices checked", analysis.get("devices_checked")], ["Links checked", analysis.get("links_checked")],
+            ["Devices checked", analysis.get("devices_checked")], ["Cabled links checked", analysis.get("links_checked")],
+            ["Logical links (drawn, not analysed)", analysis.get("logical_links", 0)],
             ["Failing required flows", analysis.get("failing_flow_count")]])})
         issues = analysis.get("issues", [])
         if issues:

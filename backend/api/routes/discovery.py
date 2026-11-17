@@ -19,6 +19,8 @@ class ScanIn(BaseModel):
     auto_credentials: bool = False
     follow_neighbours: bool = False
     max_depth: int = Field(default=3, ge=0, le=3)
+    # Optional wider routed scope (at most a /16) the engineer authorises: its /24 segments are found and swept too.
+    traverse_scope: str | None = Field(default=None, max_length=43)
 
 
 class CrawlIn(BaseModel):
@@ -38,6 +40,9 @@ class AuthenticateIn(BaseModel):
     remember: bool = False
     profile_name: str | None = Field(default=None, max_length=60)
     continue_discovery: bool = True  # follow the neighbours the read reveals, with the same credentials
+    ssh_port: int | None = Field(default=None, ge=1, le=65535)  # SSH on a non-standard port (FortiGate admin-ssh-port)
+    # Saved profiles tried in this order on each device the entered credentials did not open (first success wins).
+    fallback_profile_ids: list[int] = Field(default_factory=list, max_length=16)
 
 
 class SkipIn(BaseModel):
@@ -77,6 +82,11 @@ def result(network_id: int, db: DbSession, user: CurrentUser):
 @router.post("/{network_id}/crawl")
 def crawl(network_id: int, body: CrawlIn, db: DbSession, user: CurrentUser):
     return discovery_api.crawl(db, user, network_id, body.follow_neighbours, body.max_depth)
+
+
+@router.post("/{network_id}/reachability")
+def reachability(network_id: int, db: DbSession, user: CurrentUser):
+    return discovery_api.reachability(db, user, network_id)
 
 
 @router.post("/{network_id}/refresh")

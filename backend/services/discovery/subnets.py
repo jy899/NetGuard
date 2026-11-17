@@ -12,6 +12,8 @@ import ipaddress
 import re
 
 MIN_PREFIX = 22          # a discovered subnet larger than a /22 is reported, not swept
+TRAVERSE_MIN_PREFIX = 16  # the widest routed scope an engineer may authorise for segment traversal
+GATEWAY_HOSTS = (1, 254)  # where a segment's router address usually sits (.1 or .254 of a /24)
 MAX_SUBNETS = 16         # per crawl
 MAX_ADDRESSES = 4096     # per crawl
 PRIVATE_NETS = [ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
@@ -75,6 +77,13 @@ def candidates(observations: list[dict]) -> list[dict]:
     """Every subnet reported by an authenticated read, with the device that reported it."""
     out, seen = [], set()
     for o in observations:
+        if o.get("technique") == "segment-gateway":
+            # Credential-free: a gateway address of this /24 answered inside the authorised traversal scope.
+            row = (o.get("facts") or {}).get("segment")
+            if row and row["cidr"] not in seen:
+                seen.add(row["cidr"])
+                out.append({**row, "reported_by": o.get("subject")})
+            continue
         if not o.get("authenticated"):
             continue
         facts = o.get("facts") or {}
@@ -100,7 +109,9 @@ def plan(found: list[dict], authorised: list[str], excluded: list[str], swept: l
         if any(net.subnet_of(d) for d in done) or any(net == ipaddress.IPv4Network(t["cidr"]) for t in todo):
             continue
         inside = any(net.subnet_of(a) for a in allow)
-        if any(net.subnet_of(d) for d in deny if d.version == 4):
+        if row.get("source") in ("gateway-probe", "local") and not inside:
+            left.append({**row, "reason": "outside the authorised scope"})  # credential-free rows never follow out
+        elif any(net.subnet_of(d) for d in deny if d.version == 4):
             left.append({**row, "reason": "excluded"})
         elif not inside and not (follow and any(net.subnet_of(p) for p in PRIVATE_NETS)):
             left.append({**row, "reason": "outside the authorised scope"})
@@ -112,6 +123,25 @@ def plan(found: list[dict], authorised: list[str], excluded: list[str], swept: l
             budget -= net.num_addresses
             todo.append(row)
     return todo, left
+
+
+def segments_to_probe(scope: str, swept: list[str], excluded: list[str], limit: int = 256) -> dict[str, list[str]]:
+    """Each /24 of a wider authorised scope that was not swept yet, with its usual gateway addresses (.1 and .254)."""
+    wide = ipaddress.IPv4Network(scope, strict=False)
+    done = [ipaddress.IPv4Network(n, strict=False) for n in swept]
+    deny = [ipaddress.ip_network(n, strict=False) for n in excluded]
+    out = {}
+    blocks = [wide] if wide.prefixlen >= 24 else wide.subnets(new_prefix=24)
+    for net in blocks:
+        if len(out) >= limit:
+            break
+        if any(net.overlaps(d) for d in done) or any(net.subnet_of(d) for d in deny if d.version == 4):
+            continue
+        gateways = [str(net.network_address + n) for n in GATEWAY_HOSTS if n < net.num_addresses - 1]
+        gateways = [ip for ip in gateways if not any(ipaddress.IPv4Address(ip) in d for d in deny if d.version == 4)]
+        if gateways:
+            out[str(net)] = gateways
+    return out
 
 
 def hosts(cidr: str) -> list[str]:

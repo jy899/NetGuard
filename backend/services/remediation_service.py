@@ -24,6 +24,7 @@ Every step is recorded in a ChangeExecution row and the history.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -454,8 +455,9 @@ def execute(db: Session, user, change, data: dict) -> ChangeExecution:
         from backend.services import ai_engine
         ai_engine.record_execution(db, change, verification, success)  # a real outcome for retraining
         ai_engine.schedule_auto_retrain()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - learning from the outcome never blocks recording the execution
+        logging.getLogger("netguard.ai").warning("The outcome of change %s was not recorded for AI learning.",
+                                                 change.id, exc_info=True)
     meta = dict(network.metadata_json or {})
     meta["last_remediation"] = {"change_id": change.id, "status": execution.status, "at": _now().isoformat(timespec="seconds")}
     network.metadata_json = meta
